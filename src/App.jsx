@@ -92,6 +92,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="*" element={<Navigate to="/signin" replace />} />
         </Routes>
         </Router>
       </DataProvider>
