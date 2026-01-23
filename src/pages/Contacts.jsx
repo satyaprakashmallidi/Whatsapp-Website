@@ -1,11 +1,36 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
 
 const Contacts = () => {
-  const { contacts, addContact, deleteContact } = useData()
+  const { contacts, addContact, addContacts, updateContact, deleteContact, loading } = useData()
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [editingContact, setEditingContact] = useState(null)
   const [newContact, setNewContact] = useState({ name: '', phone: '', email: '' })
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const [importSuccess, setImportSuccess] = useState('')
+  const fileInputRef = useRef(null)
+
+  // Debug: Log contacts
+  console.log('Contacts:', contacts, 'Loading:', loading)
+
+  const handleEditClick = (contact) => {
+    setEditingContact({ ...contact })
+    setShowEditModal(true)
+  }
+
+  const handleEditContact = (e) => {
+    e.preventDefault()
+    updateContact(editingContact.id, {
+      name: editingContact.name,
+      phone: editingContact.phone,
+      email: editingContact.email
+    })
+    setShowEditModal(false)
+    setEditingContact(null)
+  }
 
   const handleAddContact = (e) => {
     e.preventDefault()
@@ -15,45 +40,239 @@ const Contacts = () => {
   }
 
   const downloadExampleCSV = () => {
-    const csvContent = "data:text/csv;charset=utf-8,Name,Phone,Email\nJohn Doe,+1234567890,john@example.com\nJane Smith,+0987654321,jane@example.com"
+    // Use tab character before the + to force Excel to preserve it
+    // \t (tab) tells Excel this is text, not a number
+    const csvContent = `Name,Phone,Email
+Rajesh Kumar,\t+919876543210,rajesh.kumar@example.com
+Priya Sharma,\t+919876543211,priya.sharma@example.com
+Amit Patel,\t+919876543212,amit.patel@example.com
+John Smith,\t+14155551234,john.smith@example.com
+Sarah Johnson,\t+14155551235,sarah.johnson@example.com`
+    
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
-    link.setAttribute('href', csvContent)
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
     link.setAttribute('download', 'contacts_example.csv')
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Check if it's a CSV file (accept .csv, .txt, or any text-based format)
+    const fileName = file.name.toLowerCase()
+    const isValidFile = fileName.endsWith('.csv') || fileName.endsWith('.txt') || file.type.includes('text')
+    
+    if (!isValidFile) {
+      setImportError('Please upload a CSV or TXT file with contact data')
+      return
+    }
+
+    setImporting(true)
+    setImportError('')
+    setImportSuccess('')
+
+    const reader = new FileReader()
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result
+        
+        // Split by different line endings (Windows \r\n, Unix \n, Mac \r)
+        const lines = text.split(/\r?\n|\r/).filter(line => line.trim())
+        
+        console.log('Total lines in file:', lines.length)
+        console.log('First 3 lines:', lines.slice(0, 3))
+        
+        // Skip header row
+        const dataLines = lines.slice(1)
+        
+        console.log('Data lines to process:', dataLines.length)
+        
+        let skippedCount = 0
+        const contactsToAdd = []
+
+        // Process each line and collect valid contacts
+        for (const line of dataLines) {
+          try {
+            // Parse CSV - handle quoted values and tabs properly
+            const values = []
+            let current = ''
+            let inQuotes = false
+
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i]
+
+              if (char === '"') {
+                inQuotes = !inQuotes
+              } else if (char === ',' && !inQuotes) {
+                values.push(current)
+                current = ''
+              } else {
+                current += char
+              }
+            }
+            values.push(current) // Add last value
+
+            // Clean up values - remove quotes, tabs, carriage returns, and extra whitespace
+            const cleanValues = values.map(v =>
+              v.replace(/^["'\t\r]+|["'\t\r]+$/g, '')
+               .replace(/\t/g, '')
+               .trim()
+            )
+
+            console.log('Parsed values:', cleanValues)
+
+            // Check if we have at least name and phone
+            if (cleanValues.length >= 2 && cleanValues[0] && cleanValues[1]) {
+              const contact = {
+                name: cleanValues[0],
+                phone: cleanValues[1],
+                email: cleanValues[2] || ''
+              }
+
+              console.log('Adding contact:', contact)
+              contactsToAdd.push(contact)
+            } else {
+              console.log('Skipping line - insufficient data:', cleanValues)
+              skippedCount++
+            }
+          } catch (lineError) {
+            console.error('Error processing line:', line, lineError)
+            skippedCount++
+          }
+        }
+
+        // Bulk add all contacts at once
+        if (contactsToAdd.length > 0) {
+          await addContacts(contactsToAdd)
+        }
+
+        const importedCount = contactsToAdd.length
+
+        console.log('Import complete. Imported:', importedCount, 'Skipped:', skippedCount)
+        
+        // Show success message
+        setImportSuccess(`Successfully imported ${importedCount} contact${importedCount !== 1 ? 's' : ''}!${skippedCount > 0 ? ` (${skippedCount} skipped)` : ''}`)
+        setImporting(false)
+        
+        // Auto-hide success message after 5 seconds
+        setTimeout(() => setImportSuccess(''), 5000)
+        
+        // Reset file input
+        if (fileInputRef.current) {
+          fileInputRef.current.value = ''
+        }
+      } catch (error) {
+        console.error('Error parsing CSV:', error)
+        setImportError('Error parsing CSV file. Please check the format.')
+        setImporting(false)
+      }
+    }
+
+    reader.onerror = () => {
+      setImportError('Error reading file')
+      setImporting(false)
+    }
+
+    reader.readAsText(file)
   }
 
   return (
     <PageLoader delay={350}>
     <div className="p-8">
       {/* Header */}
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Contacts</h1>
-          <p className="text-gray-600">Manage your audience and subscriber lists</p>
+      <div className="mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Contacts</h1>
+            <p className="text-gray-600">Manage your audience and subscriber lists</p>
+          </div>
+          <div className="flex space-x-3">
+            <button 
+              onClick={downloadExampleCSV}
+              className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Example CSV
+            </button>
+            <button 
+              onClick={handleImportClick}
+              disabled={importing}
+              className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importing ? 'Importing...' : 'Import CSV'}
+            </button>
+            <button 
+              onClick={() => setShowAddModal(true)}
+              className="px-4 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
+            >
+              Add Contact
+            </button>
+          </div>
         </div>
-        <div className="flex space-x-3">
-          <button 
-            onClick={downloadExampleCSV}
-            className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Example CSV
-          </button>
-          <button className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors">
-            Import CSV
-          </button>
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
-          >
-            Add Contact
-          </button>
-        </div>
+        
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,.txt,text/csv,text/plain"
+          onChange={handleFileUpload}
+          className="hidden"
+        />
+        
+        {/* Import success message */}
+        {importSuccess && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg mb-4">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              <span className="font-medium">{importSuccess}</span>
+              <button 
+                onClick={() => setImportSuccess('')}
+                className="ml-auto text-green-700 hover:text-green-900 text-xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+        
+        {/* Import error message */}
+        {importError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+              <span>{importError}</span>
+              <button 
+                onClick={() => setImportError('')}
+                className="ml-auto text-red-700 hover:text-red-900 text-xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Contacts Table or Empty State */}
-      {contacts.length > 0 ? (
+      {loading ? (
+        <div className="bg-white rounded-xl shadow-sm p-12">
+          <div className="text-center">
+            <p className="text-gray-600">Loading contacts...</p>
+          </div>
+        </div>
+      ) : contacts.length > 0 ? (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -87,7 +306,13 @@ const Contacts = () => {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {contact.createdAt}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                    <button
+                      onClick={() => handleEditClick(contact)}
+                      className="text-blue-600 hover:text-blue-900"
+                    >
+                      Edit
+                    </button>
                     <button
                       onClick={() => deleteContact(contact.id)}
                       className="text-red-600 hover:text-red-900"
@@ -161,9 +386,10 @@ const Contacts = () => {
                     value={newContact.phone}
                     onChange={(e) => setNewContact({...newContact, phone: e.target.value})}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
-                    placeholder="+1234567890"
+                    placeholder="+919876543210 or +14155551234"
                     required
                   />
+                  <p className="mt-1 text-xs text-gray-500">Include country code (e.g., +91 for India, +1 for US)</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -191,6 +417,91 @@ const Contacts = () => {
                   className="px-4 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
                 >
                   Add Contact
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Contact Modal */}
+      {showEditModal && editingContact && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4">
+            <div className="p-6 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-gray-900">Edit Contact</h2>
+                <button
+                  onClick={() => {
+                    setShowEditModal(false)
+                    setEditingContact(null)
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <form onSubmit={handleEditContact} className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={editingContact.name}
+                    onChange={(e) => setEditingContact({...editingContact, name: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+                    placeholder="John Doe"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    value={editingContact.phone}
+                    onChange={(e) => setEditingContact({...editingContact, phone: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+                    placeholder="+919876543210 or +14155551234"
+                    required
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Include country code (e.g., +91 for India, +1 for US)</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={editingContact.email}
+                    onChange={(e) => setEditingContact({...editingContact, email: e.target.value})}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+                    placeholder="john@example.com"
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false)
+                    setEditingContact(null)
+                  }}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
+                >
+                  Save Changes
                 </button>
               </div>
             </form>

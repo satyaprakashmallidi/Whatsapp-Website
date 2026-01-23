@@ -3,17 +3,29 @@ import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
 
 const Audiences = () => {
-  const { audiences, addAudience, updateAudience, deleteAudience } = useData()
+  const { audiences, contacts, addAudience, updateAudience, deleteAudience } = useData()
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [newAudience, setNewAudience] = useState({ name: '', description: '' })
+  const [newAudience, setNewAudience] = useState({ name: '', description: '', members: [] })
   const [openMenuId, setOpenMenuId] = useState(null)
   const [editingAudience, setEditingAudience] = useState(null)
 
   const handleCreateAudience = (e) => {
     e.preventDefault()
     addAudience(newAudience)
-    setNewAudience({ name: '', description: '' })
+    setNewAudience({ name: '', description: '', members: [] })
     setShowCreateForm(false)
+  }
+
+  const toggleContactSelection = (contactId) => {
+    setNewAudience(prev => {
+      const isSelected = prev.members.includes(contactId)
+      return {
+        ...prev,
+        members: isSelected 
+          ? prev.members.filter(id => id !== contactId)
+          : [...prev.members, contactId]
+      }
+    })
   }
 
   const handleDelete = (id) => {
@@ -22,7 +34,10 @@ const Audiences = () => {
   }
 
   const handleEdit = (audience) => {
-    setEditingAudience(audience)
+    setEditingAudience({
+      ...audience,
+      members: audience.members || []
+    })
     setOpenMenuId(null)
   }
 
@@ -30,6 +45,18 @@ const Audiences = () => {
     e.preventDefault()
     updateAudience(editingAudience.id, editingAudience)
     setEditingAudience(null)
+  }
+
+  const toggleContactSelectionForEdit = (contactId) => {
+    setEditingAudience(prev => {
+      const isSelected = prev.members.includes(contactId)
+      return {
+        ...prev,
+        members: isSelected 
+          ? prev.members.filter(id => id !== contactId)
+          : [...prev.members, contactId]
+      }
+    })
   }
 
   return (
@@ -92,7 +119,7 @@ const Audiences = () => {
                 <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
-                <span>{audience.members.length} members</span>
+                <span>{audience.members?.length || 0} members</span>
               </div>
             </div>
           ))}
@@ -159,8 +186,38 @@ const Audiences = () => {
                     onChange={(e) => setEditingAudience({...editingAudience, description: e.target.value})}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
                     placeholder="Brief description of this audience segment"
-                    rows="4"
+                    rows="3"
                   />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Audience List
+                  </label>
+                  <p className="text-sm text-gray-500 mb-2">
+                    Select contacts to add to this audience ({editingAudience.members?.length || 0} selected)
+                  </p>
+                  <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 max-h-60 overflow-y-auto">
+                    {contacts.length > 0 ? (
+                      <div className="space-y-2">
+                        {contacts.map((contact) => (
+                          <label key={contact.id} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editingAudience.members?.includes(contact.id)}
+                              onChange={() => toggleContactSelectionForEdit(contact.id)}
+                              className="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-400"
+                            />
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-900">{contact.name}</p>
+                              <p className="text-xs text-gray-500">{contact.phone}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">No contacts available. Add contacts first.</p>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="mt-6 flex items-center space-x-3">
@@ -231,9 +288,30 @@ const Audiences = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Audience List
                   </label>
-                  <p className="text-sm text-gray-500 mb-2">Select contacts to add to this audience (UI only)</p>
-                  <div className="border border-gray-300 rounded-lg p-4 bg-gray-50">
-                    <p className="text-sm text-gray-500">No contacts available</p>
+                  <p className="text-sm text-gray-500 mb-2">
+                    Select contacts to add to this audience ({newAudience.members.length} selected)
+                  </p>
+                  <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 max-h-60 overflow-y-auto">
+                    {contacts.length > 0 ? (
+                      <div className="space-y-2">
+                        {contacts.map((contact) => (
+                          <label key={contact.id} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={newAudience.members.includes(contact.id)}
+                              onChange={() => toggleContactSelection(contact.id)}
+                              className="w-4 h-4 text-yellow-500 border-gray-300 rounded focus:ring-yellow-400"
+                            />
+                            <div className="flex-1">
+                              <p className="text-sm font-medium text-gray-900">{contact.name}</p>
+                              <p className="text-xs text-gray-500">{contact.phone}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">No contacts available. Add contacts first.</p>
+                    )}
                   </div>
                 </div>
               </div>

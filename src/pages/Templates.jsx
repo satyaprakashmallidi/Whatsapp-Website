@@ -2,12 +2,35 @@ import { useState } from 'react'
 import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
 
+// Default test template that shows for all accounts
+const DEFAULT_TEMPLATE = {
+  id: 'default-template',
+  name: 'Test Campaign 23-01-2026',
+  type: 'text',
+  content: `Dear {{1}},
+
+Celebrate the rich heritage of Indian culture with us! 🇮🇳✨
+
+Experience the vibrant colors, soulful music, and timeless traditions that make India unique. From classical dance forms to mouth-watering regional cuisines, immerse yourself in a journey that honors our roots and festivals.
+
+🌟 Exclusive Offer:
+Enjoy {{2}}% OFF on our curated Indian culture collection—handicrafts, apparel, and ethnic decor.
+
+Hurry! The offer ends on {{3}}. Don't miss out on owning a piece of India's glorious legacy.
+
+Click below to explore and bring home the spirit of India today!`,
+  isDefault: true
+}
+
 const Templates = () => {
   const { templates, addTemplate, updateTemplate, deleteTemplate } = useData()
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newTemplate, setNewTemplate] = useState({ name: '', type: 'text', content: '' })
   const [openMenuId, setOpenMenuId] = useState(null)
   const [editingTemplate, setEditingTemplate] = useState(null)
+
+  // Combine default template with user templates
+  const allTemplates = [DEFAULT_TEMPLATE, ...templates]
 
   const handleCreateTemplate = (e) => {
     e.preventDefault()
@@ -41,28 +64,37 @@ const Templates = () => {
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Templates</h1>
           <p className="text-gray-600">Create reusable message templates</p>
         </div>
-        <button 
+        {/* New Template button hidden for now */}
+        {/* <button
           onClick={() => setShowCreateForm(true)}
           className="px-4 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
         >
           New Template
-        </button>
+        </button> */}
       </div>
 
       {/* Templates Grid */}
-      {templates.length > 0 ? (
-        <div className="grid grid-cols-3 gap-6">
-          {templates.map((template) => (
-            <div key={template.id} className="bg-white rounded-xl shadow-sm p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">{template.name}</h3>
-                  <span className="inline-block px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded">
-                    {template.type}
-                  </span>
+      <div className="grid grid-cols-3 gap-6">
+        {allTemplates.map((template) => (
+          <div key={template.id} className="bg-white rounded-xl shadow-sm p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-lg font-bold text-gray-900">{template.name}</h3>
+                  {template.isDefault && (
+                    <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">
+                      Default
+                    </span>
+                  )}
                 </div>
+                <span className="inline-block px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded">
+                  {template.type}
+                </span>
+              </div>
+              {/* Only show menu for non-default templates */}
+              {!template.isDefault && (
                 <div className="relative">
-                  <button 
+                  <button
                     onClick={() => setOpenMenuId(openMenuId === template.id ? null : template.id)}
                     className="text-gray-400 hover:text-gray-600 p-1"
                   >
@@ -74,13 +106,13 @@ const Templates = () => {
                   </button>
                   {openMenuId === template.id && (
                     <div className="absolute right-0 mt-1 w-32 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
-                      <button 
+                      <button
                         onClick={() => handleEdit(template)}
                         className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg"
                       >
                         Edit
                       </button>
-                      <button 
+                      <button
                         onClick={() => handleDelete(template.id)}
                         className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-b-lg"
                       >
@@ -89,31 +121,12 @@ const Templates = () => {
                     </div>
                   )}
                 </div>
-              </div>
-              <p className="text-sm text-gray-600 mb-4 line-clamp-3">{template.content}</p>
+              )}
             </div>
-          ))}
-        </div>
-      ) : (
-        /* Empty State */
-        <div className="bg-white rounded-xl shadow-sm p-12">
-          <div className="text-center max-w-md mx-auto">
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">No templates yet</h3>
-            <p className="text-gray-600 mb-6">Create reusable message templates to save time</p>
-            <button 
-              onClick={() => setShowCreateForm(true)}
-              className="px-6 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
-            >
-              Create Your First Template
-            </button>
+            <p className="text-sm text-gray-600 mb-4 line-clamp-3 whitespace-pre-line">{template.content}</p>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
       {/* Edit Template Modal */}
       {editingTemplate && (
