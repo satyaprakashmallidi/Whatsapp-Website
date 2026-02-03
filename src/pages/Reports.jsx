@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
 import jsPDF from 'jspdf'
+import { useAlert } from '../hooks/useAlert'
 
 const Reports = () => {
   const { reports, addReport, deleteReport } = useData()
+  const { showAlert, AlertComponent } = useAlert()
   const [uploadedImages, setUploadedImages] = useState([])
   const [reportTitle, setReportTitle] = useState('')
   const [reportDescription, setReportDescription] = useState('')
@@ -41,7 +43,11 @@ const Reports = () => {
   // Generate PDF Report
   const generatePDF = () => {
     if (!reportTitle || uploadedImages.length === 0) {
-      alert('Please add a title and at least one image')
+      showAlert({
+        title: 'Missing Information',
+        message: 'Please add a title and at least one image',
+        type: 'warning'
+      })
       return
     }
 
@@ -140,7 +146,11 @@ const Reports = () => {
       setUploadedImages([])
       setIsGenerating(false)
       
-      alert('Report generated successfully!')
+      showAlert({
+        title: 'Report Generated!',
+        message: 'Your report has been generated successfully!',
+        type: 'success'
+      })
     }, 500)
   }
 
@@ -163,6 +173,7 @@ const Reports = () => {
 
   return (
     <PageLoader delay={350}>
+      <AlertComponent />
       <div className="p-6">
         {/* Header */}
         <div className="mb-6">

@@ -35,3 +35,4 @@ dist-ssr
 # Misc
 *.pem
 coverage
+nul

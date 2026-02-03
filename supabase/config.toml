@@ -1,0 +1,20 @@
+# Supabase Configuration
+project_id = "cxmolmsrnofplxvsqsdp"
+
+[functions.validate-whatsapp-credentials]
+verify_jwt = false
+
+[functions.create-template]
+verify_jwt = false
+
+[functions.fetch-templates]
+verify_jwt = false
+
+[functions.update-template-statuses]
+verify_jwt = false
+
+[functions.sync-all-templates-cron]
+verify_jwt = false
+
+[functions.upload-header-image]
+verify_jwt = false

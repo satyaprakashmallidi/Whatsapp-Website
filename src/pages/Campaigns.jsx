@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
+import CredentialsWarning from '../components/CredentialsWarning'
+import ProfileSettings from '../components/ProfileSettings'
 
 // Default test template (same as in Templates page)
 const DEFAULT_TEMPLATE = {
@@ -25,6 +27,7 @@ Click below to explore and bring home the spirit of India today!`,
 const Campaigns = () => {
   const { campaigns, audiences, templates, addCampaign, sendCampaign, deleteCampaign } = useData()
   const [showNewCampaign, setShowNewCampaign] = useState(false)
+  const [showProfileSettings, setShowProfileSettings] = useState(false)
   const [activeFilter, setActiveFilter] = useState('All')
   const [sendingCampaignId, setSendingCampaignId] = useState(null)
   const [newCampaign, setNewCampaign] = useState({
@@ -92,6 +95,9 @@ const Campaigns = () => {
   return (
     <PageLoader delay={350}>
     <div className="p-8">
+      {/* Credentials Warning */}
+      <CredentialsWarning onOpenSettings={() => setShowProfileSettings(true)} />
+      
       {/* Header */}
       <div className="mb-8 flex items-center justify-between">
         <div>
@@ -358,6 +364,12 @@ const Campaigns = () => {
         </div>
       )}
     </div>
+    
+    {/* Profile Settings Modal */}
+    <ProfileSettings 
+      isOpen={showProfileSettings} 
+      onClose={() => setShowProfileSettings(false)} 
+    />
     </PageLoader>
   )
 }

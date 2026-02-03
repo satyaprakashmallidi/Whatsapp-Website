@@ -11,6 +11,7 @@ import Chats from './pages/Chats'
 import Audiences from './pages/Audiences'
 import Campaigns from './pages/Campaigns'
 import Templates from './pages/Templates'
+import TestTemplateCreation from './pages/TestTemplateCreation'
 import Reports from './pages/Reports'
 
 function App() {
@@ -78,6 +79,16 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Templates />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/test-template"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <TestTemplateCreation />
                 </Layout>
               </ProtectedRoute>
             }
