@@ -31,7 +31,7 @@ export const DataProvider = ({ children }) => {
 
     try {
       setLoading(true)
-      
+
       // Fetch user record (it should already exist from AuthContext)
       const { data, error } = await supabase
         .from('User_details')
@@ -51,9 +51,30 @@ export const DataProvider = ({ children }) => {
         // Record found, set data
         setUserRecord(data)
         setContacts(data.contacts || [])
-        setAudiences(data.audiences || [])
-        setCampaigns(data.campaigns_data || [])
+        // Audiences are now fetched from Audiences table below
         setReports(data.reports || [])
+      }
+
+      // Fetch audiences from Audiences table
+      const { data: audiencesData, error: audiencesError } = await supabase
+        .from('Audiences')
+        .select('*')
+        .eq('user_email', user.email)
+        .order('created_at', { ascending: false })
+
+      if (audiencesError) {
+        console.error('Error fetching audiences:', audiencesError)
+        setAudiences([])
+      } else {
+        // Map database fields to component expectations
+        const mappedAudiences = audiencesData.map(a => ({
+          id: a.id,
+          name: a.audience_name,
+          description: a.description,
+          members: a.audience_list || [],
+          createdAt: a.created_at
+        }))
+        setAudiences(mappedAudiences)
       }
 
       // Fetch templates from Templates table
@@ -80,6 +101,20 @@ export const DataProvider = ({ children }) => {
           createdAt: t.created_at
         }))
         setTemplates(mappedTemplates)
+      }
+
+      // Fetch campaigns from Campaigns table
+      const { data: campaignsData, error: campaignsError } = await supabase
+        .from('Campaigns')
+        .select('*')
+        .eq('user_email', user.email)
+        .order('created_at', { ascending: false })
+
+      if (campaignsError) {
+        console.error('Error fetching campaigns:', campaignsError)
+        setCampaigns([])
+      } else {
+        setCampaigns(campaignsData || [])
       }
     } catch (error) {
       console.error('Error fetching user data:', error)
@@ -175,40 +210,94 @@ export const DataProvider = ({ children }) => {
     })
   }
 
-  // Audience functions
+  // Audience functions - Now using Audiences table
   const addAudience = async (audience) => {
-    const newAudience = {
-      ...audience,
-      id: Date.now(),
-      members: audience.members || [],
-      createdAt: new Date().toISOString().split('T')[0]
+    if (!user?.email) return null
+
+    try {
+      const { data, error } = await supabase
+        .from('Audiences')
+        .insert({
+          user_email: user.email,
+          audience_name: audience.name,
+          description: audience.description || '',
+          audience_list: audience.members || []
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error adding audience:', error)
+        return null
+      }
+
+      // Map database fields to component expectations
+      const newAudience = {
+        id: data.id,
+        name: data.audience_name,
+        description: data.description,
+        members: data.audience_list || [],
+        createdAt: data.created_at
+      }
+
+      setAudiences([...audiences, newAudience])
+      return newAudience
+    } catch (error) {
+      console.error('Error adding audience:', error)
+      return null
     }
-    const updatedAudiences = [...audiences, newAudience]
-    setAudiences(updatedAudiences)
-    
-    await updateUserData({
-      audiences: updatedAudiences
-    })
-    
-    return newAudience
   }
 
   const updateAudience = async (id, updates) => {
-    const updatedAudiences = audiences.map(a => a.id === id ? { ...a, ...updates } : a)
-    setAudiences(updatedAudiences)
-    
-    await updateUserData({
-      audiences: updatedAudiences
-    })
+    if (!user?.email) return
+
+    try {
+      // Map component fields to database fields
+      const dbUpdates = {}
+      if (updates.name) dbUpdates.audience_name = updates.name
+      if (updates.description !== undefined) dbUpdates.description = updates.description
+      if (updates.members) dbUpdates.audience_list = updates.members
+
+      const { error } = await supabase
+        .from('Audiences')
+        .update(dbUpdates)
+        .eq('id', id)
+        .eq('user_email', user.email)
+
+      if (error) {
+        console.error('Error updating audience:', error)
+        return
+      }
+
+      // Update local state
+      const updatedAudiences = audiences.map(a => a.id === id ? { ...a, ...updates } : a)
+      setAudiences(updatedAudiences)
+    } catch (error) {
+      console.error('Error updating audience:', error)
+    }
   }
 
   const deleteAudience = async (id) => {
-    const updatedAudiences = audiences.filter(a => a.id !== id)
-    setAudiences(updatedAudiences)
-    
-    await updateUserData({
-      audiences: updatedAudiences
-    })
+    if (!user?.email) return
+
+    try {
+      const { error } = await supabase
+        .from('Audiences')
+        .delete()
+        .eq('id', id)
+        .eq('user_email', user.email)
+
+      if (error) {
+        console.error('Error deleting audience:', error)
+        return
+      }
+
+      // Update local state
+      const updatedAudiences = audiences.filter(a => a.id !== id)
+      setAudiences(updatedAudiences)
+    } catch (error) {
+      console.error('Error deleting audience:', error)
+    }
   }
 
   // Template functions - Now using Templates table
@@ -287,7 +376,7 @@ export const DataProvider = ({ children }) => {
       }
 
       // Update local state
-      const updatedTemplates = templates.map(t => 
+      const updatedTemplates = templates.map(t =>
         t.id === id ? { ...t, ...updates } : t
       )
       setTemplates(updatedTemplates)
@@ -319,80 +408,161 @@ export const DataProvider = ({ children }) => {
     }
   }
 
+  // Helper functions for WhatsApp template details
+  const fetchWhatsAppTemplateDetails = async (templateName) => {
+    console.log('📤 Fetching template details for:', templateName)
+
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token
+
+    console.log('🔑 Token exists:', !!token)
+    console.log('🔑 Token preview:', token?.substring(0, 50) + '...')
+    console.log('👤 User:', session?.user?.email)
+
+    if (!token) {
+      throw new Error('Not authenticated')
+    }
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/get-template-details`
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
+
+    console.log('🌐 Calling URL:', url)
+    console.log('📋 Headers being sent:', Object.keys(headers))
+    console.log('📋 Full headers:', headers)
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ template_name: templateName })
+    })
+
+    console.log('📥 Response status:', response.status)
+    console.log('📥 Response headers:', Object.fromEntries(response.headers.entries()))
+
+    const data = await response.json()
+    console.log('📥 Response data:', data)
+
+    if (!response.ok) {
+      console.error('❌ Edge function error:', data)
+      throw new Error(data.error || 'Failed to fetch template details')
+    }
+
+    return data.template
+  }
+
+  const parseTemplateComponents = (templateStructure) => {
+    // Template structure is already parsed by the edge function
+    return templateStructure
+  }
+
   // Campaign functions
   const addCampaign = async (campaign) => {
-    const audience = audiences.find(a => a.id === campaign.audienceId)
-    const newCampaign = {
-      ...campaign,
-      id: Date.now(),
-      status: 'Draft',
-      sentDate: null,
-      recipients: audience ? audience.members.length : 0,
-      delivered: 0,
-      read: 0,
-      createdAt: new Date().toISOString().split('T')[0]
+    if (!user?.email) return null
+
+    try {
+      const audience = audiences.find(a => a.id === campaign.audienceId)
+      const template = templates.find(t => String(t.id) === String(campaign.templateId))
+
+      // Insert into Campaigns table
+      const { data: newCampaign, error } = await supabase
+        .from('Campaigns')
+        .insert({
+          user_email: user.email,
+          campaign_name: campaign.name,
+          description: campaign.description,
+          message_type: 'template',
+          audience: audience ? audience.name : 'Unknown',
+          audience_id: campaign.audienceId || null,
+          message: campaign.message || template?.content || '',
+          template_name: campaign.templateName || template?.name,
+          template_language: campaign.templateLanguage || template?.language || 'en_US',
+          template_structure: campaign.templateStructure || null,
+          header_media_id: campaign.headerMediaId || null, // Save uploaded media ID
+          status: 'Draft',
+          recipients: audience ? audience.members.length : 0
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error creating campaign:', error)
+        return null
+      }
+
+      console.log('Campaign created successfully:', newCampaign)
+      await fetchUserData() // Refresh UI
+      return newCampaign
+    } catch (err) {
+      console.error('Error in addCampaign:', err)
+      return null
     }
-    const updatedCampaigns = [...campaigns, newCampaign]
-    setCampaigns(updatedCampaigns)
-    
-    await updateUserData({
-      campaigns_data: updatedCampaigns,
-      campaigns: updatedCampaigns.length
-    })
-    
-    return newCampaign
   }
 
   const updateCampaign = async (id, updates) => {
     const updatedCampaigns = campaigns.map(c => c.id === id ? { ...c, ...updates } : c)
     setCampaigns(updatedCampaigns)
-    
+
     await updateUserData({
       campaigns_data: updatedCampaigns
     })
   }
 
   const deleteCampaign = async (id) => {
-    const updatedCampaigns = campaigns.filter(c => c.id !== id)
-    setCampaigns(updatedCampaigns)
-    
-    await updateUserData({
-      campaigns_data: updatedCampaigns,
-      campaigns: updatedCampaigns.length
-    })
+    try {
+      const { error } = await supabase
+        .from('Campaigns')
+        .delete()
+        .eq('id', id)
+        .eq('user_email', user.email)
+
+      if (error) {
+        console.error('Error deleting campaign:', error)
+        return
+      }
+
+      await fetchUserData() // Refresh UI
+    } catch (err) {
+      console.error('Error in deleteCampaign:', err)
+    }
   }
 
+  /* 
+   * Triggers the campaign sending process via Edge Function
+   */
   const sendCampaign = async (id) => {
-    const campaign = campaigns.find(c => c.id === id)
-    if (!campaign) return
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
 
-    const audienceContacts = getAudienceContacts(campaign.audienceId)
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
 
-    console.log('Campaign:', campaign.name)
-    console.log('Recipients:', audienceContacts.length)
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-campaign-messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ campaign_id: id })
+      })
 
-    // TODO: Implement Edge Function for sending campaigns
-    // For now, just simulate the campaign send
-    const updatedCampaigns = campaigns.map(c =>
-      c.id === id
-        ? {
-            ...c,
-            status: 'Completed',
-            sentDate: new Date().toISOString().split('T')[0],
-            recipients: audienceContacts.length,
-            delivered: Math.floor(audienceContacts.length * 0.7),
-            read: Math.floor(audienceContacts.length * 0.5)
-          }
-        : c
-    )
-    setCampaigns(updatedCampaigns)
+      const data = await response.json()
 
-    const totalMessagesSent = updatedCampaigns.reduce((sum, c) => sum + (c.delivered || 0), 0)
+      if (!response.ok) {
+        console.error('Edge function error:', data)
+        throw new Error(data.error || 'Failed to send campaign')
+      }
 
-    await updateUserData({
-      campaigns_data: updatedCampaigns,
-      messages_sent: totalMessagesSent
-    })
+      await fetchUserData()
+      return data
+    } catch (error) {
+      console.error('Error sending campaign:', error)
+      throw error
+    }
   }
 
   // Report functions
@@ -404,18 +574,18 @@ export const DataProvider = ({ children }) => {
     }
     const updatedReports = [...reports, newReport]
     setReports(updatedReports)
-    
+
     await updateUserData({
       reports: updatedReports
     })
-    
+
     return newReport
   }
 
   const deleteReport = async (id) => {
     const updatedReports = reports.filter(r => r.id !== id)
     setReports(updatedReports)
-    
+
     await updateUserData({
       reports: updatedReports
     })
@@ -468,6 +638,8 @@ export const DataProvider = ({ children }) => {
     deleteReport,
     getAudienceById,
     getAudienceContacts,
+    fetchWhatsAppTemplateDetails,
+    parseTemplateComponents,
   }
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

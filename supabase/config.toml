@@ -18,3 +18,9 @@ verify_jwt = false
 
 [functions.upload-header-image]
 verify_jwt = false
+
+[functions.get-template-details]
+verify_jwt = false
+
+[functions.send-campaign-messages]
+verify_jwt = false

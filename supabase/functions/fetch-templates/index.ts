@@ -24,7 +24,7 @@ serve(async (req: Request) => {
     )
 
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    
+
     if (userError || !user) {
       return new Response(
         JSON.stringify({ success: false, error: 'Invalid user' }),
@@ -66,32 +66,34 @@ serve(async (req: Request) => {
     }
 
     // Fetch templates from Meta API
-    const metaApiUrl = `https://graph.facebook.com/v21.0/${meta_business_account_id}/message_templates?limit=50`
-    
-    const response = await fetch(metaApiUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${meta_access_token}`,
-        'Content-Type': 'application/json'
+    const statuses = ['APPROVED', 'PENDING', 'REJECTED']
+    const templates: any[] = []
+
+    for (const status of statuses) {
+      const metaApiUrl = `https://graph.facebook.com/v20.0/${meta_business_account_id}/message_templates?status=${status}`
+
+      console.log(`Fetching ${status} templates...`)
+
+      const response = await fetch(metaApiUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${meta_access_token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (response.ok) {
+        const responseData = await response.json()
+        if (responseData.data) {
+          templates.push(...responseData.data)
+        }
+      } else {
+        const errorData = await response.json()
+        console.error(`Failed to fetch ${status} templates:`, errorData)
+        // We continue to next status even if one fails, but track errors if needed
       }
-    })
-
-    const responseData = await response.json()
-    console.log('Meta API response:', responseData)
-
-    if (!response.ok) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: 'Meta API error',
-          message: responseData.error?.message || 'Failed to fetch templates',
-          details: responseData
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: response.status }
-      )
     }
 
-    const templates = responseData.data || []
     let syncedCount = 0
     let newCount = 0
     let updatedCount = 0
@@ -100,10 +102,10 @@ serve(async (req: Request) => {
     for (const template of templates) {
       const bodyComponent = template.components?.find((c: any) => c.type === 'BODY')
       const bodyText = bodyComponent?.text || ''
-      
+
       // Map Meta status to lowercase for consistency
       const status = template.status?.toLowerCase() || 'unknown'
-      
+
       // Check if template already exists
       const { data: existing } = await supabaseClient
         .from('Templates')
@@ -154,7 +156,7 @@ serve(async (req: Request) => {
           newCount++
         }
       }
-      
+
       syncedCount++
     }
 
