@@ -106,13 +106,14 @@ serve(async (req: Request) => {
       // Map Meta status to lowercase for consistency
       const status = template.status?.toLowerCase() || 'unknown'
 
-      // Check if template already exists
+      // Check if template already exists (by meta_template_id OR by user_email+template_name)
       const { data: existing } = await supabaseClient
         .from('Templates')
-        .select('id')
+        .select('id, meta_template_id')
         .eq('user_email', user.email)
-        .eq('meta_template_id', template.id)
-        .single()
+        .or(`meta_template_id.eq.${template.id},template_name.eq.${template.name}`)
+        .limit(1)
+        .maybeSingle()
 
       if (existing) {
         // Update existing template
@@ -125,6 +126,7 @@ serve(async (req: Request) => {
             language: template.language || 'en_US',
             body_text: bodyText,
             content: bodyText,
+            meta_template_id: template.id, // Ensure meta_template_id is set
             updated_at: new Date().toISOString()
           })
           .eq('id', existing.id)
