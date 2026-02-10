@@ -1689,13 +1689,19 @@ const Templates = () => {
 
                             {/* Card Body Text */}
                             <div>
-                              <label className="block text-xs font-medium text-gray-700 mb-1">Card Body Text *</label>
+                              <div className="flex justify-between items-center mb-1">
+                                <label className="block text-xs font-medium text-gray-700">Card Body Text *</label>
+                                <span className={`text-xs ${(card.bodyText?.length || 0) > 160 ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
+                                  {card.bodyText?.length || 0}/160
+                                </span>
+                              </div>
                               <input
                                 type="text"
                                 value={card.bodyText}
                                 onChange={(e) => updateCarouselCard(index, 'bodyText', e.target.value)}
                                 className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent text-sm"
                                 placeholder="Enter text for this card..."
+                                maxLength={160}
                                 required
                               />
                             </div>
