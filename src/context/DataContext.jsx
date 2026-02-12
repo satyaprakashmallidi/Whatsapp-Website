@@ -409,8 +409,8 @@ export const DataProvider = ({ children }) => {
   }
 
   // Helper functions for WhatsApp template details
-  const fetchWhatsAppTemplateDetails = async (templateName) => {
-    console.log('📤 Fetching template details for:', templateName)
+  const fetchWhatsAppTemplateDetails = async (templateName, language = 'en_US') => {
+    console.log(`📤 Fetching template details for: ${templateName} (${language})`)
 
     const { data: { session } } = await supabase.auth.getSession()
     const token = session?.access_token
@@ -436,7 +436,10 @@ export const DataProvider = ({ children }) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify({ template_name: templateName })
+      body: JSON.stringify({
+        template_name: templateName,
+        language: language
+      })
     })
 
     console.log('📥 Response status:', response.status)
@@ -481,6 +484,7 @@ export const DataProvider = ({ children }) => {
           template_language: campaign.templateLanguage || template?.language || 'en_US',
           template_structure: campaign.templateStructure || null,
           header_media_id: campaign.headerMediaId || null, // Save uploaded media ID
+          card_media_ids: campaign.cardMediaIds || {}, // Save carousel media IDs
           status: 'Draft',
           recipients: audience ? audience.members.length : 0
         })

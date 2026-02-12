@@ -7,16 +7,30 @@ export const useAlert = () => {
     title: '',
     message: '',
     type: 'info',
-    onClose: null
+    onClose: null,
+    onConfirm: null,
+    confirmText: 'Delete',
+    cancelText: 'Cancel'
   })
 
-  const showAlert = ({ title = '', message, type = 'info', onClose = null }) => {
+  const showAlert = ({
+    title = '',
+    message,
+    type = 'info',
+    onClose = null,
+    onConfirm = null,
+    confirmText = 'Delete',
+    cancelText = 'Cancel'
+  }) => {
     setAlertState({
       isOpen: true,
       title,
       message,
       type,
-      onClose
+      onClose,
+      onConfirm,
+      confirmText,
+      cancelText
     })
   }
 
@@ -25,7 +39,7 @@ export const useAlert = () => {
     if (alertState.onClose) {
       alertState.onClose()
     }
-    setAlertState(prev => ({ ...prev, isOpen: false, onClose: null }))
+    setAlertState(prev => ({ ...prev, isOpen: false, onClose: null, onConfirm: null }))
   }
 
   const AlertComponent = () => (
@@ -35,6 +49,9 @@ export const useAlert = () => {
       title={alertState.title}
       message={alertState.message}
       type={alertState.type}
+      onConfirm={alertState.onConfirm}
+      confirmText={alertState.confirmText}
+      cancelText={alertState.cancelText}
     />
   )
 

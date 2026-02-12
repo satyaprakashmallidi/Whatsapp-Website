@@ -36,7 +36,7 @@ serve(async (req: Request) => {
         }
 
         // Parse request body
-        const { template_name } = await req.json()
+        const { template_name, language } = await req.json()
 
         if (!template_name) {
             return new Response(
@@ -78,7 +78,19 @@ serve(async (req: Request) => {
         }
 
         const data = await response.json()
-        const template = data.data?.[0]
+        const templatesFound = data.data || []
+
+        console.log(`🔍 Found ${templatesFound.length} templates with name: ${template_name}${language ? ` and lang: ${language}` : ''}`)
+
+        // Log brief summary of all found templates
+        templatesFound.forEach((t: any, i: number) => {
+            console.log(`   [${i}] ID: ${t.id}, Lang: ${t.language}, Status: ${t.status}, Components: ${t.components?.map((c: any) => c.type).join(', ')}`)
+        })
+
+        // Filter by language if provided, otherwise take the first one
+        const template = language
+            ? templatesFound.find((t: any) => t.language === language) || templatesFound[0]
+            : templatesFound[0]
 
         if (!template) {
             return new Response(
@@ -90,15 +102,18 @@ serve(async (req: Request) => {
         // Parse template structure
         const components = template.components || []
 
-        const structure = {
+        const structure: any = {
             hasHeader: false,
             headerType: null,
             headerHandleId: null,
             bodyParameters: [],
+            hasCarousel: false,
+            carouselCards: [],
+            components: components
         }
 
-        // Find header component
-        const headerComponent = components.find((c: any) => c.type === 'HEADER')
+        // Find header component - Case insensitive
+        const headerComponent = components.find((c: any) => c.type.toUpperCase() === 'HEADER')
         if (headerComponent && headerComponent.format) {
             const format = headerComponent.format.toLowerCase()
             if (['image', 'video', 'document'].includes(format)) {
@@ -108,8 +123,31 @@ serve(async (req: Request) => {
             }
         }
 
-        // Find body component with parameters
-        const bodyComponent = components.find((c: any) => c.type === 'BODY')
+        // Find carousel component - Case insensitive
+        const carouselComponent = components.find((c: any) => c.type.toUpperCase() === 'CAROUSEL')
+        if (carouselComponent && carouselComponent.cards) {
+            structure.hasCarousel = true
+            structure.carouselCards = carouselComponent.cards.map((card: any, index: number) => {
+                const cardHeader = card.components.find((c: any) => c.type.toUpperCase() === 'HEADER')
+                const cardBody = card.components.find((c: any) => c.type.toUpperCase() === 'BODY')
+                const cardButtons = card.components.find((c: any) => c.type.toUpperCase() === 'BUTTONS')
+
+                return {
+                    index,
+                    hasHeader: !!cardHeader,
+                    headerFormat: cardHeader?.format,
+                    bodyText: cardBody?.text,
+                    hasButtons: !!cardButtons,
+                    buttons: cardButtons?.buttons || []
+                }
+            })
+
+            // If it's a carousel, we usually don't want a root header image upload
+            // but we'll leave it in the structure just in case it's a hybrid
+        }
+
+        // Find body component with parameters - Case insensitive
+        const bodyComponent = components.find((c: any) => c.type.toUpperCase() === 'BODY')
         console.log('🔍 Body component:', JSON.stringify(bodyComponent, null, 2))
 
         if (bodyComponent && bodyComponent.text) {

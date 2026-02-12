@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 
-const AlertModal = ({ isOpen, onClose, title, message, type = 'info' }) => {
+const AlertModal = ({ isOpen, onClose, title, message, type = 'info', onConfirm, confirmText = 'Delete', cancelText = 'Cancel' }) => {
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === 'Escape') onClose()
     }
-    
+
     if (isOpen) {
       document.addEventListener('keydown', handleEscape)
       return () => document.removeEventListener('keydown', handleEscape)
@@ -58,26 +58,41 @@ const AlertModal = ({ isOpen, onClose, title, message, type = 'info' }) => {
         <div className={`${getBgColor()} px-6 py-5 rounded-t-xl flex items-center justify-center`}>
           {getIcon()}
         </div>
-        
+
         <div className="px-6 py-5">
           {title && (
             <h3 className="text-xl font-bold text-gray-900 mb-3 text-center">
               {title}
             </h3>
           )}
-          
+
           <div className="text-gray-700 text-center whitespace-pre-line">
             {message}
           </div>
         </div>
 
-        <div className="px-6 py-4 bg-gray-50 rounded-b-xl flex justify-center">
+        <div className="px-6 py-4 bg-gray-50 rounded-b-xl flex justify-center space-x-3">
           <button
             onClick={onClose}
-            className="px-6 py-2 bg-[#FFC107] text-gray-900 font-semibold rounded-lg hover:bg-[#FFB300] transition-colors min-w-[100px]"
+            className={`px-6 py-2 font-semibold rounded-lg transition-colors min-w-[100px] ${onConfirm
+                ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                : 'bg-[#FFC107] text-gray-900 hover:bg-[#FFB300]'
+              }`}
           >
-            OK
+            {onConfirm ? cancelText : 'OK'}
           </button>
+
+          {onConfirm && (
+            <button
+              onClick={() => {
+                onConfirm()
+                onClose()
+              }}
+              className="px-6 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors min-w-[100px]"
+            >
+              {confirmText}
+            </button>
+          )}
         </div>
       </div>
     </div>

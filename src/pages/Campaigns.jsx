@@ -30,6 +30,7 @@ const Campaigns = () => {
   const [uploadedImage, setUploadedImage] = useState(null)
   const [uploadedMediaId, setUploadedMediaId] = useState(null)
   const [uploadingImage, setUploadingImage] = useState(false)
+  const [cardMedia, setCardMedia] = useState({}) // { cardIndex: { file, mediaId, uploading } }
 
   const handleCreateCampaign = async (e, action = 'draft') => {
     e.preventDefault()
@@ -55,6 +56,10 @@ const Campaigns = () => {
         templateLanguage: selectedTemplate ? selectedTemplate.language : 'en_US',
         templateStructure: freshTemplateStructure, // Use freshly fetched structure
         headerMediaId: uploadedMediaId, // Include uploaded media ID
+        cardMediaIds: Object.keys(cardMedia).reduce((acc, current) => {
+          if (cardMedia[current].mediaId) acc[current] = cardMedia[current].mediaId
+          return acc
+        }, {}),
         message: selectedTemplate ? selectedTemplate.content : '',
         messageType: selectedTemplate ? selectedTemplate.type : 'text'
       })
@@ -71,6 +76,7 @@ const Campaigns = () => {
       setTemplateStructure(null)
       setUploadedImage(null)
       setUploadedMediaId(null)
+      setCardMedia({})
       setShowNewCampaign(false)
     } catch (error) {
       console.error("Error creating/sending campaign:", error)
@@ -82,11 +88,22 @@ const Campaigns = () => {
 
   const handleTemplateChange = async (e) => {
     const templateId = e.target.value
+
+    // 🔍 DEBUG: Log selection process
+    console.log('🔍 Selected Template ID from dropdown:', templateId)
+    console.log('📋 All available templates:', templates)
+
     const selectedTemplate = templates.find(t => String(t.id) === String(templateId))
+
+    // 🔍 DEBUG: Log found template
+    console.log('✅ Found selected template:', selectedTemplate)
+    console.log('📝 Template name that will be fetched:', selectedTemplate?.name)
+    console.log('🌐 Template language that will be used:', selectedTemplate?.language)
 
     // Reset uploaded image state when template changes
     setUploadedImage(null)
     setUploadedMediaId(null)
+    setCardMedia({}) // Reset carousel media
 
     setNewCampaign({
       ...newCampaign,
@@ -99,8 +116,19 @@ const Campaigns = () => {
       setFetchingTemplate(true)
       setTemplateStructure(null)
       try {
-        const structure = await fetchWhatsAppTemplateDetails(selectedTemplate.name)
-        console.log('📋 Template structure fetched:', structure)
+        // 🔍 DEBUG: Log API call parameters
+        console.log('🚀 Calling fetchWhatsAppTemplateDetails with:', {
+          name: selectedTemplate.name,
+          language: selectedTemplate.language || 'en_US'
+        })
+
+        const structure = await fetchWhatsAppTemplateDetails(
+          selectedTemplate.name,
+          selectedTemplate.language || 'en_US'
+        )
+
+        console.log('📋 Template structure fetched (stringified):', JSON.stringify(structure, null, 2))
+        console.log('📦 Received template structure name:', structure?.name)
         setTemplateStructure(structure)
       } catch (error) {
         console.error('Error fetching template details:', error)
@@ -184,11 +212,62 @@ const Campaigns = () => {
     }
   }
 
+  const handleCardImageUpload = async (e, cardIndex) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) return
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) return
+
+    setCardMedia(prev => ({
+      ...prev,
+      [cardIndex]: { ...prev[cardIndex], file, uploading: true }
+    }))
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
+      if (!token) return
+
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-media`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` },
+          body: formData
+        }
+      )
+
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Upload failed')
+
+      console.log(`✅ Image uploaded for card ${cardIndex}! Media ID:`, data.media_id)
+      setCardMedia(prev => ({
+        ...prev,
+        [cardIndex]: { file, mediaId: data.media_id, uploading: false }
+      }))
+
+    } catch (error) {
+      console.error(`Upload error for card ${cardIndex}:`, error)
+      setCardMedia(prev => {
+        const next = { ...prev }
+        delete next[cardIndex]
+        return next
+      })
+    }
+  }
+
   const handleCancelCampaign = () => {
     setNewCampaign({ name: '', description: '', templateId: '', templateName: '', audienceId: '', audience: '' })
     setTemplateStructure(null)
     setUploadedImage(null)
     setUploadedMediaId(null)
+    setCardMedia({})
     setShowNewCampaign(false)
   }
 
@@ -444,6 +523,97 @@ const Campaigns = () => {
                       ))}
                     </select>
                   </div>
+                  {/* Carousel Card Images Upload */}
+                  {templateStructure && (templateStructure.hasCarousel || templateStructure.components?.find(c => c.type === 'CAROUSEL')) && (() => {
+                    const carouselComp = templateStructure.hasCarousel
+                      ? { cards: templateStructure.carouselCards.map(c => ({ components: [{ type: 'BODY', text: c.bodyText }] })) } // Fallback structure for preview
+                      : templateStructure.components.find(c => c.type === 'CAROUSEL');
+
+                    const cards = templateStructure.carouselCards || carouselComp?.cards || [];
+
+                    if (cards.length === 0) {
+                      console.warn('⚠️ Carousel template detected but no cards found in structure:', templateStructure);
+                      return null;
+                    }
+
+                    const uploadedCount = Object.keys(cardMedia).filter(key => cardMedia[key]?.mediaId).length;
+                    const allUploaded = uploadedCount === cards.length;
+
+                    return (
+                      <div className="space-y-4">
+                        <div className={`border rounded-xl p-5 ${allUploaded ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
+                          <div className="flex items-start gap-4 mb-5">
+                            <div className={`p-2 rounded-lg ${allUploaded ? 'bg-green-500' : 'bg-amber-500'}`}>
+                              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 002 2v12a2 2 0 002 2z" />
+                              </svg>
+                            </div>
+                            <div className="flex-1">
+                              <h4 className={`text-base font-bold ${allUploaded ? 'text-green-900' : 'text-amber-900'}`}>
+                                Carousel Images {allUploaded ? 'Ready' : 'Required'}
+                              </h4>
+                              <p className={`text-sm ${allUploaded ? 'text-green-700' : 'text-amber-700'}`}>
+                                {allUploaded
+                                  ? 'All card images have been uploaded successfully.'
+                                  : `Please upload images for all cards. Currently ${uploadedCount} of ${cards.length} uploaded.`}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {cards.map((card, index) => {
+                              const isUploaded = !!cardMedia[index]?.mediaId;
+                              const isUploading = cardMedia[index]?.uploading;
+                              const cardBodyText = card.bodyText || card.components?.find(c => c.type === 'BODY')?.text;
+
+                              return (
+                                <div key={index} className={`p-4 rounded-lg border transition-all ${isUploaded ? 'bg-white border-green-200 shadow-sm' : 'bg-white/50 border-gray-200 border-dashed'}`}>
+                                  <div className="flex items-center justify-between mb-3">
+                                    <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Card #{index + 1}</span>
+                                    {isUploaded ? (
+                                      <span className="flex items-center text-[10px] font-bold text-green-600 uppercase">
+                                        <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                        </svg>
+                                        Uploaded
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-amber-600 uppercase">Missing Photo</span>
+                                    )}
+                                  </div>
+
+                                  {/* Card Text Preview */}
+                                  <div className="mb-3 p-2 bg-gray-50 rounded border border-gray-100 min-h-[40px]">
+                                    <p className="text-[10px] text-gray-500 line-clamp-2 italic">
+                                      {cardBodyText || 'No text content'}
+                                    </p>
+                                  </div>
+
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => handleCardImageUpload(e, index)}
+                                    disabled={isUploading || isSubmitting}
+                                    className="block w-full text-[10px] text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-[10px] file:font-bold file:bg-[#FFC107] file:text-gray-900 hover:file:bg-[#FFB300] file:cursor-pointer disabled:opacity-50"
+                                  />
+
+                                  {isUploading && (
+                                    <div className="mt-2 flex items-center text-[10px] text-blue-600 font-medium">
+                                      <svg className="animate-spin h-3 w-3 mr-1.5" fill="none" viewBox="0 0 24 24">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                      </svg>
+                                      Uploading to Meta...
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Loading indicator while fetching template */}
                   {fetchingTemplate && (
@@ -459,7 +629,7 @@ const Campaigns = () => {
                   )}
 
                   {/* Image Upload for Templates with Image Header */}
-                  {templateStructure && templateStructure.hasHeader && templateStructure.headerType === 'image' && (
+                  {templateStructure && templateStructure.hasHeader && templateStructure.headerType === 'image' && !templateStructure.hasCarousel && (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
                       <div className="flex items-start gap-2 mb-3">
                         <svg className="w-5 h-5 text-amber-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
@@ -509,7 +679,14 @@ const Campaigns = () => {
                     <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
                       <p className="text-xs font-medium text-gray-500 mb-1">Template Preview:</p>
                       <p className="text-sm text-gray-700 whitespace-pre-line">
-                        {templates.find(t => String(t.id) === String(newCampaign.templateId))?.content || ''}
+                        {(() => {
+                          // Try to get live text from fetched structure first
+                          const bodyComp = templateStructure?.components?.find(c => c.type === 'BODY' || c.type === 'body');
+                          if (bodyComp?.text) return bodyComp.text;
+
+                          // Fallback to database content
+                          return templates.find(t => String(t.id) === String(newCampaign.templateId))?.content || '';
+                        })()}
                       </p>
                     </div>
                   )}
@@ -540,7 +717,10 @@ const Campaigns = () => {
                       !newCampaign.audienceId ||
                       !newCampaign.templateId ||
                       // If template has image header, require uploaded media ID
-                      (templateStructure?.hasHeader && templateStructure?.headerType === 'image' && !uploadedMediaId)
+                      (templateStructure?.hasHeader && templateStructure?.headerType === 'image' && !uploadedMediaId) ||
+                      // If template has carousel, require all card images
+                      (templateStructure?.hasCarousel &&
+                        templateStructure.carouselCards?.some((_, idx) => !cardMedia[idx]?.mediaId))
                     }
                     className="px-4 py-2 text-sm bg-yellow-500 text-white font-medium rounded-lg hover:bg-yellow-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:text-gray-500"
                   >

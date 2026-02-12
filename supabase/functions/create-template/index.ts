@@ -42,7 +42,7 @@ serve(async (req: Request) => {
 
     // Get the user from the token
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    
+
     if (userError || !user) {
       return new Response(
         JSON.stringify({ success: false, error: 'Invalid user' }),
@@ -56,7 +56,7 @@ serve(async (req: Request) => {
     // Parse request body
     const requestBody = await req.json()
     console.log('Received request body:', JSON.stringify(requestBody, null, 2))
-    
+
     const { name, language, category, components, headerHandle } = requestBody
 
     // Validate required fields
@@ -73,16 +73,20 @@ serve(async (req: Request) => {
         }
       )
     }
-    
+
     // Extract body text from components for database storage
     const bodyComponent = components.find((c: any) => c.type === 'BODY')
     const bodyText = bodyComponent?.text || ''
-    
+
     // Check if there's a header with IMAGE format
     const headerComponent = components.find((c: any) => c.type === 'HEADER')
     const hasImageHeader = headerComponent && headerComponent.format === 'IMAGE'
 
-    console.log('Creating template:', name)
+    // Determine template type
+    const hasCarouselComp = components.some((c: any) => c.type.toUpperCase() === 'CAROUSEL')
+    const templateType = hasCarouselComp ? 'carousel' : 'text'
+
+    console.log('Creating template:', name, 'Type:', templateType)
     console.log('User email:', user.email)
 
     // Fetch user's Meta WhatsApp API credentials
@@ -132,7 +136,7 @@ serve(async (req: Request) => {
       components: components.map((comp: any) => {
         // Normalize component type to uppercase
         const normalizedComp = { ...comp, type: comp.type.toUpperCase() }
-        
+
         // For BUTTONS component, normalize button types to lowercase (Meta API requirement)
         if (normalizedComp.type === 'BUTTONS' && normalizedComp.buttons) {
           normalizedComp.buttons = normalizedComp.buttons.map((btn: any) => {
@@ -146,7 +150,7 @@ serve(async (req: Request) => {
             return normalizedBtn
           })
         }
-        
+
         return normalizedComp
       })
     }
@@ -167,7 +171,7 @@ serve(async (req: Request) => {
 
     // Call Meta API to create template
     const metaApiUrl = `https://graph.facebook.com/v21.0/${meta_business_account_id}/message_templates`
-    
+
     const response = await fetch(metaApiUrl, {
       method: 'POST',
       headers: {
@@ -203,7 +207,7 @@ serve(async (req: Request) => {
       .insert({
         user_email: user.email,
         template_name: name,
-        template_type: 'text',
+        template_type: templateType,
         content: bodyText,
         category: category,
         language: language,

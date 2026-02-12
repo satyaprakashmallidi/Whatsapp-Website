@@ -185,6 +185,42 @@ serve(async (req: Request) => {
                     })
                 }
 
+                // Add carousel component if exists
+                if (templateStructure.hasCarousel && templateStructure.carouselCards) {
+                    const cards = templateStructure.carouselCards.map((card: any, idx: number) => {
+                        const cardMediaId = campaign.card_media_ids?.[idx] || campaign.card_media_ids?.[String(idx)]
+
+                        const cardComponents: any[] = []
+
+                        // Add card header if it's an image and we have a media ID
+                        if (card.hasHeader && card.headerFormat === 'IMAGE' && cardMediaId) {
+                            cardComponents.push({
+                                type: "header",
+                                parameters: [{
+                                    type: "image",
+                                    image: {
+                                        id: cardMediaId
+                                    }
+                                }]
+                            })
+                        }
+
+                        // Add card body parameters if they exist 
+                        // Note: For now assuming no dynamic variables in card body or using contact name if needed
+                        // Meta allows card body too, but we need to check if we support variables there
+
+                        return {
+                            card_index: idx,
+                            components: cardComponents
+                        }
+                    })
+
+                    components.push({
+                        type: "carousel",
+                        cards: cards
+                    })
+                }
+
                 if (components.length > 0) {
                     payload.template.components = components
                 }

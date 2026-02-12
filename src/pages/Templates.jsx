@@ -7,7 +7,7 @@ import CredentialsWarning from '../components/CredentialsWarning'
 import ProfileSettings from '../components/ProfileSettings'
 
 const Templates = () => {
-  const { templates, addTemplate } = useData()
+  const { templates, addTemplate, deleteTemplate } = useData()
   const { showAlert, AlertComponent } = useAlert()
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [showProfileSettings, setShowProfileSettings] = useState(false)
@@ -51,6 +51,7 @@ const Templates = () => {
   const [syncing, setSyncing] = useState(false)
   const [updatingStatuses, setUpdatingStatuses] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
+  const [deletingTemplateId, setDeletingTemplateId] = useState(null)
   const textareaRef = useRef(null)
   const headerTextareaRef = useRef(null)
   const footerTextareaRef = useRef(null)
@@ -114,6 +115,24 @@ const Templates = () => {
     }
 
     return params
+  }
+
+  const [nameError, setNameError] = useState('')
+
+  // Check for duplicate template name
+  const checkDuplicateName = (name) => {
+    if (!name) {
+      setNameError('')
+      return false
+    }
+    const sanitizedName = sanitizeTemplateName(name)
+    const exists = templates.some(t => t.template_name === sanitizedName || t.name === sanitizedName)
+    if (exists) {
+      setNameError('Template name already exists. Please use a unique name.')
+      return true
+    }
+    setNameError('')
+    return false
   }
 
   // Handle text change with parameter detection
@@ -181,7 +200,7 @@ const Templates = () => {
       } else {
         showAlert({
           title: 'Templates Synced Successfully!',
-          message: `Total: ${data.details.total}\nNew: ${data.details.new}\nUpdated: ${data.details.updated}`,
+          message: `Total: ${data.details.total}\nNew: ${data.details.new}\nUpdated: ${data.details.updated}\nDeleted: ${data.details.deleted || 0}`,
           type: 'success',
           onClose: () => window.location.reload()
         })
@@ -385,6 +404,76 @@ const Templates = () => {
     }
   }
 
+  // Handle template deletion
+  // Handle template deletion process
+  const performDelete = async (template, templateName) => {
+    setDeletingTemplateId(template.id)
+    try {
+      const session = await supabase.auth.getSession()
+      const token = session.data.session?.access_token
+      const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/delete-template`
+
+      const response = await fetch(functionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: templateName,
+          id: template.id
+        })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || data.error || 'Failed to delete template')
+      }
+
+      // Update local state without reload
+      if (deleteTemplate) {
+        deleteTemplate(template.id)
+      }
+
+      showAlert({
+        title: 'Template Deleted',
+        message: 'The template has been successfully deleted.',
+        type: 'success'
+      })
+    } catch (error) {
+      console.error('Delete template error:', error)
+      showAlert({
+        title: 'Delete Failed',
+        message: error.message || 'An error occurred while deleting the template.',
+        type: 'error'
+      })
+    } finally {
+      setDeletingTemplateId(null)
+    }
+  }
+
+  const handleDeleteTemplate = (template) => {
+    const templateName = template.template_name || template.name
+
+    showAlert({
+      title: 'Delete Template',
+      message: `Are you sure you want to delete the template "${templateName}"? This action cannot be undone.`,
+      type: 'warning',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      onConfirm: () => performDelete(template, templateName)
+    })
+  }
+
+  const handleEditTemplate = (template) => {
+    // Only allow editing if status is rejected or failed, or if it's a draft (if you have drafts)
+    // For now, maybe just load it into the form?
+    // This part wasn't requested but good to have a placeholder or just logic
+    // For now, let's just scroll to top and populate form?
+    // implementation pending user requirement
+  }
+
   // Handle updating template statuses from Meta
   const handleUpdateStatuses = async () => {
     setUpdatingStatuses(true)
@@ -487,7 +576,7 @@ const Templates = () => {
     const newButton = {
       id: Date.now(),
       type: type,
-      text: type === 'URL' ? 'Visit Website' : type === 'PHONE_NUMBER' ? 'Call Us' : 'Quick Reply',
+      text: type === 'URL' ? 'Visit Website' : type === 'PHONE_NUMBER' ? 'Call Us' : 'Quick Message',
       url: type === 'URL' ? 'https://example.com' : '',
       phone_number: type === 'PHONE_NUMBER' ? '+911234567890' : ''
     }
@@ -740,6 +829,33 @@ const Templates = () => {
         return
       }
 
+      // Validate mixed buttons
+      if (newTemplate.hasButtons && newTemplate.buttons.length > 0) {
+        const hasQuickReply = newTemplate.buttons.some(b => b.type === 'QUICK_REPLY')
+        const hasCTA = newTemplate.buttons.some(b => b.type === 'URL' || b.type === 'PHONE_NUMBER')
+
+        if (hasQuickReply && hasCTA) {
+          showAlert({
+            title: 'Invalid Button Mix',
+            message: 'Meta does not allow mixing Quick Reply and Call to Action (URL/Phone) buttons in the same template.',
+            type: 'error'
+          })
+          setCreating(false)
+          return
+        }
+
+        // Validate button text
+        if (newTemplate.buttons.some(b => !b.text.trim())) {
+          showAlert({
+            title: 'Missing Button Text',
+            message: 'All buttons must have a label.',
+            type: 'error'
+          })
+          setCreating(false)
+          return
+        }
+      }
+
       console.log('Sending to Edge Function:', {
         name: sanitizedName,
         language: newTemplate.language,
@@ -899,7 +1015,9 @@ const Templates = () => {
         headerImageHandle: '',
         bodyText: '',
         hasFooter: false,
-        footerText: ''
+        footerText: '',
+        hasButtons: false,
+        buttons: []
       })
       setShowCreateForm(false)
 
@@ -1073,16 +1191,38 @@ const Templates = () => {
               <div key={template.id} className="bg-white rounded-xl shadow-sm p-6">
                 <div className="mb-4">
                   <div className="flex items-start justify-between mb-2">
-                    <h3 className="text-lg font-bold text-gray-900">{template.name}</h3>
-                    {template.status && (
-                      <span className={`inline-block px-2 py-1 text-xs font-semibold rounded-full ${template.status === 'approved' ? 'bg-green-100 text-green-800' :
-                        template.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                          template.status === 'rejected' || template.status === 'failed' ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                        }`}>
-                        {template.status.toUpperCase()}
-                      </span>
-                    )}
+                    <h3 className="text-lg font-bold text-gray-900 truncate pr-2">{template.template_name || template.name}</h3>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {template.status && (
+                        <span className={`inline-block px-2 py-1 text-xs font-semibold rounded-full ${template.status === 'approved' ? 'bg-green-100 text-green-800' :
+                          template.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            template.status === 'rejected' || template.status === 'failed' ? 'bg-red-100 text-red-800' :
+                              'bg-gray-100 text-gray-800'
+                          }`}>
+                          {template.status.toUpperCase()}
+                        </span>
+                      )}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteTemplate(template)
+                        }}
+                        disabled={deletingTemplateId === template.id}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors"
+                        title="Delete Template"
+                      >
+                        {deletingTemplateId === template.id ? (
+                          <svg className="animate-spin h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex items-center space-x-2">
                     <span className="inline-block px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 rounded">
@@ -1217,15 +1357,23 @@ const Templates = () => {
                       <input
                         type="text"
                         value={newTemplate.name}
-                        onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+                        onChange={(e) => {
+                          setNewTemplate({ ...newTemplate, name: e.target.value })
+                          checkDuplicateName(e.target.value)
+                        }}
+                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent ${nameError ? 'border-red-500' : 'border-gray-300'
+                          }`}
                         placeholder="e.g., Order Confirmation or order_confirmation"
                         required
                         disabled={creating}
                       />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Will be auto-converted to: <code className="bg-gray-100 px-1 rounded">{sanitizeTemplateName(newTemplate.name) || 'lowercase_with_underscores'}</code>
-                      </p>
+                      {nameError ? (
+                        <p className="text-xs text-red-600 mt-1 font-semibold">{nameError}</p>
+                      ) : (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Will be auto-converted to: <code className="bg-gray-100 px-1 rounded">{sanitizeTemplateName(newTemplate.name) || 'lowercase_with_underscores'}</code>
+                        </p>
+                      )}
                     </div>
 
                     {/* Category */}
@@ -1508,6 +1656,144 @@ const Templates = () => {
                       )}
                     </div>
 
+                    {/* Buttons Section (Optional) */}
+                    <div className="border-t border-gray-200 pt-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <label className="flex items-center text-sm font-medium text-gray-700">
+                          <svg className="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122" />
+                          </svg>
+                          Buttons (Optional)
+                        </label>
+                        <label className="flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newTemplate.hasButtons}
+                            onChange={(e) => setNewTemplate({ ...newTemplate, hasButtons: e.target.checked, buttons: e.target.checked ? newTemplate.buttons : [] })}
+                            className="mr-2 w-5 h-5 text-yellow-400 focus:ring-yellow-400 rounded"
+                            disabled={creating}
+                          />
+                          <span className="text-sm text-gray-600">Enable Buttons</span>
+                        </label>
+                      </div>
+
+                      {newTemplate.hasButtons && (() => {
+                        const hasURL = newTemplate.buttons.some(b => b.type === 'URL');
+                        const hasPhone = newTemplate.buttons.some(b => b.type === 'PHONE_NUMBER');
+                        const hasQR = newTemplate.buttons.some(b => b.type === 'QUICK_REPLY');
+                        const hasCTA = hasURL || hasPhone;
+
+                        return (
+                          <div className="ml-7 space-y-4">
+                            <div className="flex flex-wrap gap-2 mb-4">
+                              <button
+                                type="button"
+                                onClick={() => addButton('URL')}
+                                disabled={creating || hasURL || hasQR}
+                                className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-md text-xs font-medium hover:bg-blue-100 disabled:opacity-50"
+                              >
+                                {hasURL ? '✓ Website Added' : '+ Visit Website'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addButton('PHONE_NUMBER')}
+                                disabled={creating || hasPhone || hasQR}
+                                className="px-3 py-1.5 bg-green-50 text-green-600 rounded-md text-xs font-medium hover:bg-green-100 disabled:opacity-50"
+                              >
+                                {hasPhone ? '✓ Phone Added' : '+ Call Phone'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => addButton('QUICK_REPLY')}
+                                disabled={creating || hasQR || hasCTA}
+                                className="px-3 py-1.5 bg-purple-50 text-purple-600 rounded-md text-xs font-medium hover:bg-purple-100 disabled:opacity-50"
+                              >
+                                {hasQR ? '✓ Message Added' : '+ Quick Message'}
+                              </button>
+                            </div>
+
+                            <div className="space-y-3">
+                              {newTemplate.buttons.map((button) => (
+                                <div key={button.id} className="p-3 border border-gray-200 rounded-lg bg-gray-50 relative group">
+                                  <button
+                                    type="button"
+                                    onClick={() => removeButton(button.id)}
+                                    className="absolute top-2 right-2 text-gray-400 hover:text-red-500"
+                                  >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+
+                                  <div className="grid grid-cols-1 gap-3">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${button.type === 'URL' ? 'bg-blue-100 text-blue-700' :
+                                        button.type === 'PHONE_NUMBER' ? 'bg-green-100 text-green-700' :
+                                          'bg-purple-100 text-purple-700'
+                                        }`}>
+                                        {button.type.replace('_', ' ')}
+                                      </span>
+                                    </div>
+
+                                    <div>
+                                      <label className="block text-xs font-medium text-gray-500 mb-1">Button Text</label>
+                                      <input
+                                        type="text"
+                                        value={button.text}
+                                        onChange={(e) => updateButton(button.id, 'text', e.target.value)}
+                                        className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
+                                        placeholder="Button Label"
+                                        maxLength={25}
+                                        disabled={creating}
+                                      />
+                                    </div>
+
+                                    {button.type === 'URL' && (
+                                      <div>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Website URL</label>
+                                        <input
+                                          type="url"
+                                          value={button.url}
+                                          onChange={(e) => updateButton(button.id, 'url', e.target.value)}
+                                          className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
+                                          placeholder="https://example.com"
+                                          disabled={creating}
+                                        />
+                                      </div>
+                                    )}
+
+                                    {button.type === 'PHONE_NUMBER' && (
+                                      <div>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Phone Number</label>
+                                        <input
+                                          type="tel"
+                                          value={button.phone_number}
+                                          onChange={(e) => updateButton(button.id, 'phone_number', e.target.value)}
+                                          className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
+                                          placeholder="+911234567890"
+                                          disabled={creating}
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                              {newTemplate.buttons.length === 0 && (
+                                <p className="text-xs text-gray-400 italic text-center">No buttons added yet</p>
+                              )}
+                            </div>
+
+                            {(newTemplate.buttons.some(b => b.type === 'QUICK_REPLY') &&
+                              newTemplate.buttons.some(b => b.type !== 'QUICK_REPLY' && b.type !== '')) && (
+                                <p className="text-xs text-red-500 font-medium">
+                                  ⚠️ Meta does not allow mixing Quick Reply and Call to Action buttons.
+                                </p>
+                              )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
                     {/* Meta Template Guidelines */}
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                       <p className="text-sm font-semibold text-blue-900 mb-2">📋 Meta WhatsApp Template Rules:</p>
@@ -1548,7 +1834,7 @@ const Templates = () => {
                       </button>
                       <button
                         type="submit"
-                        disabled={creating || !newTemplate.name || !newTemplate.bodyText}
+                        disabled={creating || !newTemplate.name || !newTemplate.bodyText || !!nameError}
                         className="px-4 py-2 bg-yellow-500 text-white rounded-lg text-sm font-medium hover:bg-yellow-600 disabled:opacity-50 flex items-center gap-2"
                       >
                         {creating ? (
@@ -1573,11 +1859,23 @@ const Templates = () => {
                       <input
                         type="text"
                         value={carouselTemplate.name}
-                        onChange={(e) => setCarouselTemplate({ ...carouselTemplate, name: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+                        onChange={(e) => {
+                          setCarouselTemplate({ ...carouselTemplate, name: e.target.value })
+                          checkDuplicateName(e.target.value)
+                        }}
+                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent ${nameError ? 'border-red-500' : 'border-gray-300'
+                          }`}
                         placeholder="e.g., product_carousel"
                         required
+                        disabled={creating}
                       />
+                      {nameError ? (
+                        <p className="text-xs text-red-600 mt-1 font-semibold">{nameError}</p>
+                      ) : (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Will be auto-converted to: <code className="bg-gray-100 px-1 rounded">{sanitizeTemplateName(carouselTemplate.name) || 'lowercase_with_underscores'}</code>
+                        </p>
+                      )}
                     </div>
 
                     {/* Main Body Text */}
@@ -1605,10 +1903,48 @@ const Templates = () => {
                           type="button"
                           onClick={addCarouselCard}
                           className="px-4 py-2 bg-yellow-500 text-white text-sm font-medium rounded-lg hover:bg-yellow-600 transition-colors disabled:bg-gray-300"
-                          disabled={carouselTemplate.cards.length >= 10}
+                          disabled={carouselTemplate.cards.length >= 10 || creating}
                         >
                           + Add Card
                         </button>
+                      </div>
+
+                      {/* Carousel Completion Checklist */}
+                      <div className="mb-6 p-4 bg-gray-100 border border-gray-200 rounded-xl">
+                        <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 flex items-center">
+                          <svg className="w-4 h-4 mr-2 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.633.271 1.243.644 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.644 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.644-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.644-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          Completion Checklist
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div className={`p-2 rounded-lg text-sm flex items-center ${carouselTemplate.mainBody ? 'text-green-700 bg-green-50' : 'text-gray-500 bg-white border border-dashed border-gray-300'}`}>
+                            {carouselTemplate.mainBody ? '✓' : '○'} Main Body Text
+                          </div>
+                          <div className={`p-2 rounded-lg text-sm flex items-center ${carouselTemplate.cards.length >= 2 ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'}`}>
+                            {carouselTemplate.cards.length >= 2 ? '✓' : '○'} Minimum 2 Cards ({carouselTemplate.cards.length}/2)
+                          </div>
+                          {carouselTemplate.cards.map((card, idx) => {
+                            const hasImage = !!card.headerImageFile
+                            const hasBody = !!card.bodyText
+                            const hasButtons = card.buttons?.length > 0
+                            const isComplete = hasImage && hasBody && hasButtons
+
+                            return (
+                              <div key={idx} className={`p-2 rounded-lg text-sm flex flex-col ${isComplete ? 'text-green-700 bg-green-50' : 'text-amber-700 bg-amber-50'}`}>
+                                <div className="flex items-center justify-between font-bold mb-1">
+                                  <span>Card #{idx + 1}</span>
+                                  {isComplete ? '✓ Ready' : '○ Incomplete'}
+                                </div>
+                                <div className="grid grid-cols-3 gap-1 text-[10px] uppercase font-bold text-gray-400">
+                                  <span className={hasImage ? 'text-green-600' : 'text-red-400'}>Photo</span>
+                                  <span className={hasBody ? 'text-green-600' : 'text-red-400'}>Text</span>
+                                  <span className={hasButtons ? 'text-green-600' : 'text-red-400'}>Buttons</span>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
 
                       <div className="space-y-4">
@@ -1630,7 +1966,19 @@ const Templates = () => {
 
                             {/* Card Image Upload */}
                             <div className="mb-4">
-                              <label className="block text-xs font-medium text-gray-700 mb-1">Card Image *</label>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="block text-xs font-bold text-gray-700 uppercase tracking-tighter">
+                                  Card Image <span className="text-red-500">*</span>
+                                </label>
+                                {!card.headerImageFile && (
+                                  <span className="text-[10px] font-bold text-red-500 uppercase flex items-center">
+                                    <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                    </svg>
+                                    Required
+                                  </span>
+                                )}
+                              </div>
                               <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md hover:border-gray-400 transition-colors bg-white">
                                 <div className="space-y-1 text-center">
                                   {card.headerImageFile ? (
@@ -1835,7 +2183,7 @@ const Templates = () => {
                       <button
                         type="button"
                         onClick={handleCreateTemplate}
-                        disabled={creating || !carouselTemplate.name || !carouselTemplate.mainBody || carouselTemplate.cards.length === 0}
+                        disabled={creating || !carouselTemplate.name || !carouselTemplate.mainBody || carouselTemplate.cards.length === 0 || !!nameError}
                         className="px-4 py-2 bg-yellow-500 text-white rounded-lg text-sm font-medium hover:bg-yellow-600 disabled:opacity-50 flex items-center gap-2"
                       >
                         {creating ? (

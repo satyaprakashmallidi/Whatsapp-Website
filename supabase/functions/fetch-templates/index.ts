@@ -106,6 +106,10 @@ serve(async (req: Request) => {
       // Map Meta status to lowercase for consistency
       const status = template.status?.toLowerCase() || 'unknown'
 
+      // Determine template type
+      const hasCarousel = template.components?.some((c: any) => c.type.toUpperCase() === 'CAROUSEL')
+      const templateType = hasCarousel ? 'carousel' : 'text'
+
       // Check if template already exists (by meta_template_id OR by user_email+template_name)
       const { data: existing } = await supabaseClient
         .from('Templates')
@@ -121,12 +125,13 @@ serve(async (req: Request) => {
           .from('Templates')
           .update({
             template_name: template.name,
+            template_type: templateType,
             status: status,
             category: template.category || 'UTILITY',
             language: template.language || 'en_US',
             body_text: bodyText,
             content: bodyText,
-            meta_template_id: template.id, // Ensure meta_template_id is set
+            meta_template_id: template.id,
             updated_at: new Date().toISOString()
           })
           .eq('id', existing.id)
@@ -143,7 +148,7 @@ serve(async (req: Request) => {
           .insert({
             user_email: user.email,
             template_name: template.name,
-            template_type: 'text',
+            template_type: templateType,
             content: bodyText,
             category: template.category || 'UTILITY',
             language: template.language || 'en_US',
@@ -162,6 +167,35 @@ serve(async (req: Request) => {
       syncedCount++
     }
 
+    // Delete templates that are no longer in Meta
+    const metaTemplateIds = templates.map(t => t.id)
+
+    // Get all local templates for this user that have a meta_template_id
+    const { data: localTemplates } = await supabaseClient
+      .from('Templates')
+      .select('id, meta_template_id, template_name')
+      .eq('user_email', user.email)
+      .not('meta_template_id', 'is', null)
+
+    let deletedCount = 0
+
+    if (localTemplates && localTemplates.length > 0) {
+      const templatesToDelete = localTemplates.filter(
+        (local: any) => !metaTemplateIds.includes(local.meta_template_id)
+      )
+
+      for (const toDelete of templatesToDelete) {
+        console.log(`Deleting template '${toDelete.template_name}' (ID: ${toDelete.meta_template_id}) as it was removed from Meta`)
+
+        await supabaseClient
+          .from('Templates')
+          .delete()
+          .eq('id', toDelete.id)
+
+        deletedCount++
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -169,7 +203,8 @@ serve(async (req: Request) => {
         details: {
           total: syncedCount,
           new: newCount,
-          updated: updatedCount
+          updated: updatedCount,
+          deleted: deletedCount
         }
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
