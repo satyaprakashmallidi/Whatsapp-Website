@@ -5,6 +5,7 @@ import PageLoader from '../components/PageLoader'
 import { useAlert } from '../hooks/useAlert'
 import CredentialsWarning from '../components/CredentialsWarning'
 import ProfileSettings from '../components/ProfileSettings'
+import { generateStandardTemplate, generateCarouselTemplate } from '../services/geminiService'
 
 const Templates = () => {
   const { templates, addTemplate, deleteTemplate } = useData()
@@ -37,13 +38,14 @@ const Templates = () => {
   // Carousel template state
   const [carouselTemplate, setCarouselTemplate] = useState({
     name: '',
-    category: 'UTILITY',
+    category: 'MARKETING',
     language: 'en_US',
     mainBody: '',
     cards: []
   })
 
   const [showPreview, setShowPreview] = useState(true)
+  const [currentCardIndex, setCurrentCardIndex] = useState(0)
   const [activeTab, setActiveTab] = useState('approved')
   const [creating, setCreating] = useState(false)
   const [showParamSuggestions, setShowParamSuggestions] = useState(false)
@@ -52,6 +54,38 @@ const Templates = () => {
   const [updatingStatuses, setUpdatingStatuses] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
   const [deletingTemplateId, setDeletingTemplateId] = useState(null)
+
+  // ── AI Generator State ──
+  const [showStandardAI, setShowStandardAI] = useState(false)
+  const [showCarouselAI, setShowCarouselAI] = useState(false)
+  const [aiGenerating, setAiGenerating] = useState(false)
+  const [aiError, setAiError] = useState('')
+  const [aiStatus, setAiStatus] = useState('') // step-by-step status message
+
+  // Standard AI form
+  const [stdAiForm, setStdAiForm] = useState({
+    purpose: '',
+    tone: 'formal',
+    language: 'English',
+    includeHeader: false,
+    headerType: 'TEXT', // 'TEXT' | 'IMAGE'
+    headerImageFile: null,
+    includeFooter: false,
+    buttonTypes: ['QUICK_REPLY'], // min 1, max 2
+    buttonValues: ['', ''],      // value per selected button (text / url / phone)
+  })
+
+  // Carousel AI form
+  const [carAiForm, setCarAiForm] = useState({
+    purpose: '',
+    tone: 'friendly',
+    language: 'English',
+    numCards: 2,
+    buttonTypes: ['QUICK_REPLY'],
+    cardTopics: [], // optional per-card hint
+    cardImages: [], // File[] — one per card
+    cardButtons: [[{ text: '', value: '' }, { text: '', value: '' }], [{ text: '', value: '' }, { text: '', value: '' }]],
+  })
   const textareaRef = useRef(null)
   const headerTextareaRef = useRef(null)
   const footerTextareaRef = useRef(null)
@@ -217,7 +251,173 @@ const Templates = () => {
     }
   }
 
+  // Mapping for Meta language codes
+  const LANGUAGE_MAP = {
+    'English': 'en_US',
+    'Telugu': 'te',
+    'Hindi': 'hi'
+  }
+
   // Handle image upload to get media handle
+  // ── AI Handler: Standard Template ──
+  const handleGenerateStandardTemplate = async () => {
+    if (!stdAiForm.purpose.trim()) return
+    setAiGenerating(true)
+    setAiError('')
+    setAiStatus('')
+
+    let uploadedImageHandle = null
+
+    try {
+      // Step 1: Upload image to Meta (if IMAGE header chosen)
+      if (stdAiForm.includeHeader && stdAiForm.headerType === 'IMAGE' && stdAiForm.headerImageFile) {
+        setAiStatus('📤 Uploading image to Meta… please wait')
+        uploadedImageHandle = await handleImageUpload(stdAiForm.headerImageFile)
+        if (!uploadedImageHandle) {
+          throw new Error('Image upload to Meta failed. Please try again.')
+        }
+      }
+
+      // Step 2: Generate template with Gemini
+      setAiStatus('✨ AI is generating your template…')
+      const result = await generateStandardTemplate({
+        purpose: stdAiForm.purpose,
+        tone: stdAiForm.tone,
+        language: stdAiForm.language,
+        category: newTemplate.category,
+        includeHeader: stdAiForm.includeHeader,
+        includeFooter: stdAiForm.includeFooter,
+        buttonTypes: stdAiForm.buttonTypes,
+        headerImage: (stdAiForm.includeHeader && stdAiForm.headerType === 'IMAGE' && stdAiForm.headerImageFile)
+          ? stdAiForm.headerImageFile : null,
+      })
+
+      // Step 3: Apply AI output to main form
+      setNewTemplate(prev => ({
+        ...prev,
+        name: result.templateName ? sanitizeTemplateName(result.templateName) : prev.name,
+        language: LANGUAGE_MAP[stdAiForm.language] || 'en_US',
+        bodyText: result.bodyText || prev.bodyText,
+        hasHeader: stdAiForm.includeHeader,
+        headerFormat: stdAiForm.includeHeader ? stdAiForm.headerType : prev.headerFormat,
+        headerText: (stdAiForm.includeHeader && stdAiForm.headerType === 'TEXT') ? (result.headerText || '') : prev.headerText,
+        // Apply both file (for preview) and handle (for Meta submission)
+        headerImageFile: (stdAiForm.includeHeader && stdAiForm.headerType === 'IMAGE') ? stdAiForm.headerImageFile : prev.headerImageFile,
+        headerImageHandle: uploadedImageHandle || prev.headerImageHandle,
+        hasFooter: stdAiForm.includeFooter,
+        footerText: stdAiForm.includeFooter ? (result.footerText || '') : prev.footerText,
+        hasButtons: result.buttons?.length > 0,
+        buttons: result.buttons?.map((btn, i) => ({
+          id: i + 1,
+          type: btn.type,
+          text: btn.text,
+          url: btn.type === 'URL' ? (stdAiForm.buttonValues[i] || btn.url || '') : '',
+          phone_number: btn.type === 'PHONE_NUMBER' ? (stdAiForm.buttonValues[i] || btn.phone || '') : '',
+          quick_reply_payload: btn.type === 'QUICK_REPLY' ? (stdAiForm.buttonValues[i] || btn.text || '') : '',
+        })) || prev.buttons,
+      }))
+
+      setAiStatus('')
+      // Removed setShowStandardAI(false) so panel stays open
+    } catch (err) {
+      console.error('AI generation error:', err)
+      setAiError(err.message || 'Failed to generate. Please try again.')
+      setAiStatus('')
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
+  // ── AI Handler: Carousel Template ──
+  const handleGenerateCarouselTemplate = async () => {
+    if (!carAiForm.purpose.trim()) return
+    if (carAiForm.cardImages.length < 2) {
+      setAiError('Please upload at least 2 card images.')
+      return
+    }
+    setAiGenerating(true)
+    setAiError('')
+    try {
+      // Step 1: Upload all card images to Meta first
+      setAiError('')
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token
+      if (!token) throw new Error('Not authenticated')
+
+      const imageHandles = await Promise.all(
+        carAiForm.cardImages.map(async (file, idx) => {
+          if (!file) throw new Error(`Image for card ${idx + 1} is missing.`)
+          const formData = new FormData()
+          formData.append('file', file)
+          formData.append('fileType', file.type)
+          const res = await fetch(
+            `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-header-image`,
+            { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData }
+          )
+          const data = await res.json()
+          if (!res.ok || !data.success || !data.handle) {
+            throw new Error(data.error || data.message || `Failed to upload image for card ${idx + 1}`)
+          }
+          return data.handle
+        })
+      )
+
+      // Step 2: Run AI generation (Gemini reads the images for copy)
+      const result = await generateCarouselTemplate({
+        purpose: carAiForm.purpose,
+        tone: carAiForm.tone,
+        language: carAiForm.language,
+        buttonTypes: carAiForm.buttonTypes,
+        cardTopics: carAiForm.cardTopics,
+        cardImages: carAiForm.cardImages,
+      })
+
+      // Step 3: Build cards with both the local File preview and the Meta handle
+      setCarouselTemplate(prev => ({
+        ...prev,
+        name: result.templateName ? sanitizeTemplateName(result.templateName) : prev.name,
+        category: 'MARKETING',
+        language: LANGUAGE_MAP[carAiForm.language] || 'en_US',
+        mainBody: result.mainBody || prev.mainBody,
+        cards: result.cards.map((card, i) => ({
+          id: crypto.randomUUID(),
+          headerImageFile: carAiForm.cardImages[i] || null,
+          headerImageHandle: imageHandles[i] || '',
+          bodyText: card.bodyText || '',
+          buttons: (carAiForm.buttonTypes || []).filter(Boolean).map((type, btnIdx) => ({
+            id: btnIdx + 1,
+            type: (type || 'quick_reply').toLowerCase(),
+            text: type === 'QUICK_REPLY'
+              ? (carAiForm.cardButtons[i]?.[btnIdx]?.text || '')
+              : (card.buttonTexts?.[btnIdx] || ''),
+            value: type === 'QUICK_REPLY'
+              ? (carAiForm.cardButtons[i]?.[btnIdx]?.text || '')
+              : (carAiForm.cardButtons[i]?.[btnIdx]?.value || ''),
+          })),
+        })),
+      }))
+
+      // setShowCarouselAI(false)
+    } catch (err) {
+      console.error('AI generation error:', err)
+      setAiError(err.message || 'Failed to generate. Please try again.')
+    } finally {
+      setAiGenerating(false)
+    }
+  }
+
+  // Carousel AI Card Button Management
+  const updateAiCardButton = (cardIndex, btnIndex, field, value) => {
+    setCarAiForm(prev => {
+      const newButtons = [...prev.cardButtons]
+      if (!newButtons[cardIndex]) newButtons[cardIndex] = [{ text: '', value: '' }, { text: '', value: '' }]
+      newButtons[cardIndex] = [...newButtons[cardIndex]]
+      if (!newButtons[cardIndex][btnIndex]) newButtons[cardIndex][btnIndex] = { text: '', value: '' }
+      newButtons[cardIndex][btnIndex] = { ...newButtons[cardIndex][btnIndex], [field]: value }
+      return { ...prev, cardButtons: newButtons }
+    })
+  }
+
   // Carousel Card Management
   const addCarouselCard = () => {
     if (carouselTemplate.cards.length >= 10) return
@@ -629,11 +829,24 @@ const Templates = () => {
                   {newTemplate.headerFormat === 'TEXT' && newTemplate.headerText && (
                     <div className="font-bold text-gray-900">{newTemplate.headerText}</div>
                   )}
-                  {newTemplate.headerFormat === 'IMAGE' && newTemplate.headerImageFile && (
-                    <div className="w-full h-40 bg-gray-200 rounded flex items-center justify-center">
-                      <svg className="w-16 h-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
+                  {newTemplate.headerFormat === 'IMAGE' && (
+                    <div className={`bg-gray-200 relative w-full rounded-t-lg overflow-hidden flex items-center justify-center ${!newTemplate.headerImageFile ? 'h-56' : ''}`}>
+                      {newTemplate.headerImageFile ? (
+                        <div className="w-full relative">
+                          <img
+                            src={URL.createObjectURL(newTemplate.headerImageFile)}
+                            alt="Header"
+                            className="w-full h-auto block"
+                          />
+                          <div className="absolute inset-0 bg-black/5 pointer-events-none" />
+                        </div>
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-400">
+                          <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -675,8 +888,87 @@ const Templates = () => {
     )
   }
 
+  // Carousel Preview rendering function
+  const renderCarouselPreview = () => {
+    return (
+      <div className="w-full max-w-md font-sans">
+        <div className="bg-[#E5DDD5] p-4 rounded-lg shadow-lg" style={{ backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")' }}>
+
+          {/* Header / Main Body */}
+          {carouselTemplate.mainBody && (
+            <div className="bg-white rounded-lg p-3 shadow-sm mb-4 relative max-w-[85%] self-start">
+              <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">{carouselTemplate.mainBody}</p>
+              {/* Bubble tail */}
+              <div className="absolute top-0 -left-2 w-3 h-3 overflow-hidden">
+                <div className="bg-white transform origin-top-right rotate-45 w-full h-full"></div>
+              </div>
+              <div className="text-[10px] text-gray-400 text-right mt-1">
+                {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
+          )}
+
+          {/* Scrollable Cards Container */}
+          {carouselTemplate.cards.length > 0 ? (
+            <div className="flex overflow-x-auto gap-3 pb-4 snap-x snap-mandatory scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">
+              {carouselTemplate.cards.map((card, index) => (
+                <div key={index} className="flex-none w-[220px] bg-white rounded-lg shadow-sm overflow-hidden snap-center flex flex-col">
+                  {/* Card Image */}
+                  <div className="bg-gray-100 relative" style={{ aspectRatio: '1.91/1' }}> {/* standard link aspect ratio 1.91:1 close to 17:10 */}
+                    {card.headerImageFile ? (
+                      <img
+                        src={URL.createObjectURL(card.headerImageFile)}
+                        alt={`Card ${index + 1}`}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-400 bg-gray-200">
+                        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Card Body */}
+                  <div className="p-3 flex-grow">
+                    <p className="text-sm text-gray-800 line-clamp-3 leading-snug">
+                      {card.bodyText || 'Card body text...'}
+                    </p>
+                  </div>
+
+                  {/* Buttons */}
+                  {card.buttons && card.buttons.length > 0 && (
+                    <div className="border-t border-gray-100">
+                      {card.buttons.map((btn, btnIdx) => (
+                        <div key={btnIdx} className="border-t border-gray-100 first:border-t-0 px-3 py-2.5 flex items-center justify-center gap-2 cursor-pointer hover:bg-gray-50 active:bg-gray-100 transition-colors">
+                          {btn.type === 'PHONE_NUMBER' && <svg className="w-4 h-4 text-[#00A5F4]" fill="currentColor" viewBox="0 0 24 24"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.977.977 0 00-1.01.24l-1.57 1.97c-2.83-1.49-5.15-3.8-6.62-6.62l1.97-1.57c.23-.29.33-.67.24-1.01a17.3 17.3 0 01-.56-3.53c0-.54-.45-.99-.99-.99H4.19C3.65 3.3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .72-.63.72-1.19v-3.44c0-.54-.45-.99-.99-.99z" /></svg>}
+                          {btn.type === 'URL' && <svg className="w-4 h-4 text-[#00A5F4]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>}
+                          {btn.type === 'QUICK_REPLY' && <svg className="w-4 h-4 text-[#00A5F4]" fill="currentColor" viewBox="0 0 24 24"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z" /></svg>}
+
+                          <span className="text-[#00A5F4] text-sm font-medium truncate max-w-[150px]">
+                            {btn.text || 'Button'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white/80 backdrop-blur rounded-lg p-6 text-center shadow-sm">
+              <p className="text-gray-500 text-sm">Add cards to view preview</p>
+            </div>
+          )}
+        </div>
+        <p className="text-center text-xs text-gray-400 mt-2">Preview only (rendering may vary by device)</p>
+      </div>
+    )
+  }
+
   const handleCreateTemplate = async (e) => {
-    e.preventDefault()
+    if (e?.preventDefault) e.preventDefault()
     setCreating(true)
 
     try {
@@ -702,10 +994,25 @@ const Templates = () => {
           throw new Error('At least one card is required')
         }
 
+        // Validate main body text against Meta rules
+        const mainBodyParams = extractParameters(carouselTemplate.mainBody)
+        const mainBodyValidation = validateTemplate(carouselTemplate.mainBody, mainBodyParams)
+        if (!mainBodyValidation.valid) {
+          throw new Error(`Main Body: ${mainBodyValidation.error}`)
+        }
+
         // Validate cards
         carouselTemplate.cards.forEach((card, index) => {
           if (!card.headerImageHandle) throw new Error(`Card ${index + 1} is missing an image`)
           if (!card.bodyText) throw new Error(`Card ${index + 1} is missing body text`)
+
+          // Validate card body text against Meta rules
+          const cardParams = extractParameters(card.bodyText)
+          const cardValidation = validateTemplate(card.bodyText, cardParams)
+          if (!cardValidation.valid) {
+            throw new Error(`Card ${index + 1}: ${cardValidation.error}`)
+          }
+
           if (!card.buttons || card.buttons.length === 0) throw new Error(`Card ${index + 1} must have at least one button`)
         })
 
@@ -1303,7 +1610,7 @@ const Templates = () => {
                         value="standard"
                         checked={templateType === 'standard'}
                         onChange={(e) => setTemplateType(e.target.value)}
-                        className="w-5 h-5 text-yellow-500 focus:ring-2 focus:ring-yellow-400"
+                        className="sr-only"
                       />
                       <svg className={`w-6 h-6 ${templateType === 'standard' ? 'text-yellow-600' : 'text-gray-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1349,6 +1656,243 @@ const Templates = () => {
                 {templateType === 'standard' ? (
                   /* STANDARD TEMPLATE FORM */
                   <form onSubmit={handleCreateTemplate} className="space-y-4">
+
+                    {/* ✨ AI Generator Panel */}
+                    <div className="rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => { setShowStandardAI(!showStandardAI); setAiError('') }}
+                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-purple-100/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">✨</span>
+                          <span className="font-semibold text-purple-800 text-sm">Generate with AI</span>
+                        </div>
+                        <svg className={`w-4 h-4 text-purple-600 transition-transform ${showStandardAI ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showStandardAI && (
+                        <div className="px-4 pb-4 space-y-3 border-t border-purple-200 pt-3">
+                          {/* Purpose */}
+                          <div>
+                            <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">What is this template for? *</label>
+                            <textarea
+                              value={stdAiForm.purpose}
+                              onChange={e => setStdAiForm(p => ({ ...p, purpose: e.target.value }))}
+                              placeholder="e.g. Notify citizens about road repair completion in Ward 7"
+                              className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent resize-none bg-white"
+                              rows={2}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            {/* Tone */}
+                            <div>
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Tone</label>
+                              <select
+                                value={stdAiForm.tone}
+                                onChange={e => setStdAiForm(p => ({ ...p, tone: e.target.value }))}
+                                className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 bg-white"
+                              >
+                                <option value="formal">Formal</option>
+                                <option value="friendly">Friendly</option>
+                                <option value="urgent">Urgent</option>
+                              </select>
+                            </div>
+                            {/* Language */}
+                            <div>
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Language</label>
+                              <select
+                                value={stdAiForm.language}
+                                onChange={e => setStdAiForm(p => ({ ...p, language: e.target.value }))}
+                                className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 bg-white"
+                              >
+                                <option value="English">English</option>
+                                <option value="Telugu">Telugu</option>
+                                <option value="Hindi">Hindi</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Buttons — Pill Multi-Select */}
+                          <div>
+                            <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Button Types (Max 2) *</label>
+                            <div className="flex gap-2">
+                              {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(bType => {
+                                const isSelected = stdAiForm.buttonTypes.includes(bType);
+                                const isDisabled = !isSelected && stdAiForm.buttonTypes.length >= 2;
+                                return (
+                                  <button
+                                    key={bType}
+                                    type="button"
+                                    disabled={isDisabled}
+                                    onClick={() => {
+                                      setStdAiForm(p => {
+                                        if (isSelected) {
+                                          if (p.buttonTypes.length <= 1) return p;
+                                          return { ...p, buttonTypes: p.buttonTypes.filter(t => t !== bType) };
+                                        } else {
+                                          return { ...p, buttonTypes: [...p.buttonTypes, bType] };
+                                        }
+                                      });
+                                    }}
+                                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${isSelected
+                                      ? 'bg-purple-600 text-white border-purple-600 shadow-md scale-105'
+                                      : isDisabled
+                                        ? 'hidden'
+                                        : 'bg-white text-purple-600 border-purple-200 hover:border-purple-400 hover:bg-purple-50'
+                                      }`}
+                                  >
+                                    {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'URL' : 'Phone'}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Per-button value inputs */}
+                          {stdAiForm.buttonTypes.filter(Boolean).map((bType, btnIdx) => (
+                            <div key={btnIdx}>
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">
+                                {bType === 'QUICK_REPLY' && 'Quick Reply Text *'}
+                                {bType === 'URL' && 'Button URL *'}
+                                {bType === 'PHONE_NUMBER' && 'Phone Number (with country code) *'}
+                              </label>
+                              <input
+                                type={bType === 'URL' ? 'url' : bType === 'PHONE_NUMBER' ? 'tel' : 'text'}
+                                value={stdAiForm.buttonValues[btnIdx] || ''}
+                                onChange={e => {
+                                  let val = e.target.value;
+                                  if (bType === 'PHONE_NUMBER') {
+                                    val = val.replace(/[^\d+]/g, '');
+                                    if (val.indexOf('+') > 0) val = val.slice(0, 1) + val.slice(1).replace(/\+/g, '');
+                                  } else if (bType === 'URL') {
+                                    if (val && !val.startsWith('https://') && !val.startsWith('http')) {
+                                      val = 'https://' + val;
+                                    }
+                                  }
+                                  const vals = [...stdAiForm.buttonValues];
+                                  vals[btnIdx] = val;
+                                  setStdAiForm(p => ({ ...p, buttonValues: vals }));
+                                }}
+                                placeholder={
+                                  bType === 'URL' ? 'https://example.com' :
+                                    bType === 'PHONE_NUMBER' ? '+91 98765 43210' :
+                                      "e.g. Yes, I'm interested"
+                                }
+                                maxLength={bType === 'QUICK_REPLY' ? 25 : undefined}
+                                className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent bg-white"
+                              />
+                              {bType === 'PHONE_NUMBER' && (
+                                <p className="text-xs text-purple-400 mt-1">Include country code, e.g. +91 for India</p>
+                              )}
+                            </div>
+                          ))}
+
+                          {/* Toggles — Header & Footer */}
+                          <div className="flex gap-4">
+                            <label className="flex items-center gap-2 text-xs text-purple-700 cursor-pointer">
+                              <input type="checkbox" checked={stdAiForm.includeHeader} onChange={e => setStdAiForm(p => ({ ...p, includeHeader: e.target.checked }))} className="rounded text-purple-500" />
+                              Include Header
+                            </label>
+                            <label className="flex items-center gap-2 text-xs text-purple-700 cursor-pointer">
+                              <input type="checkbox" checked={stdAiForm.includeFooter} onChange={e => setStdAiForm(p => ({ ...p, includeFooter: e.target.checked }))} className="rounded text-purple-500" />
+                              Include Footer
+                            </label>
+                          </div>
+
+                          {/* Header type — shown when Include Header is checked */}
+                          {stdAiForm.includeHeader && (
+                            <div>
+                              <label className="block text-xs font-semibold text-purple-700 mb-2 uppercase tracking-wide">Header Type *</label>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setStdAiForm(p => ({ ...p, headerType: 'TEXT', headerImageFile: null }))}
+                                  className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border-2 transition-all ${stdAiForm.headerType === 'TEXT' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-purple-200 bg-white text-gray-400 hover:border-purple-300'}`}
+                                >
+                                  <span className="text-lg font-bold">T</span>
+                                  <span className="text-xs font-semibold">Text</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setStdAiForm(p => ({ ...p, headerType: 'IMAGE' }))}
+                                  className={`flex flex-col items-center gap-1 py-2.5 rounded-xl border-2 transition-all ${stdAiForm.headerType === 'IMAGE' ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-purple-200 bg-white text-gray-400 hover:border-purple-300'}`}
+                                >
+                                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
+                                  <span className="text-xs font-semibold">Image</span>
+                                </button>
+                              </div>
+
+                              {/* Image upload — shown when IMAGE header type selected */}
+                              {stdAiForm.headerType === 'IMAGE' && (
+                                <label className="flex items-center gap-2 cursor-pointer mt-2">
+                                  <div className={`flex-1 flex items-center gap-2 px-3 py-2 text-sm rounded-lg border-2 border-dashed transition-colors ${stdAiForm.headerImageFile ? 'border-purple-400 bg-purple-50 text-purple-700' : 'border-purple-200 bg-white text-gray-400 hover:border-purple-400 hover:text-purple-600'}`}>
+                                    {stdAiForm.headerImageFile ? (
+                                      <><span>🖼️</span> {stdAiForm.headerImageFile.name.slice(0, 28)}{stdAiForm.headerImageFile.name.length > 28 ? '…' : ''}</>
+                                    ) : (
+                                      <><span>📁</span> Upload header image (AI will read it)</>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    onChange={e => {
+                                      const file = e.target.files[0]
+                                      if (file) setStdAiForm(p => ({ ...p, headerImageFile: file }))
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            </div>
+                          )}
+
+                          {aiError && <p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">{aiError}</p>}
+                          {aiStatus && (
+                            <div className="flex items-center gap-2 text-xs text-purple-600 bg-purple-50 px-3 py-2 rounded-lg border border-purple-100 animate-pulse">
+                              <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                              </svg>
+                              {aiStatus}
+                            </div>
+                          )}
+
+                          <div className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={handleGenerateStandardTemplate}
+                              disabled={aiGenerating || !stdAiForm.purpose.trim()}
+                              className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-sm font-bold rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                              {aiGenerating ? (
+                                <>
+                                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                                  Generating...
+                                </>
+                              ) : (
+                                <><span>✨</span> Generate Template</>
+                              )}
+                            </button>
+                            {newTemplate.name && newTemplate.bodyText && (
+                              <button
+                                type="submit"
+                                disabled={creating || aiGenerating}
+                                className="flex-1 py-2.5 bg-black text-white text-sm font-bold rounded-lg hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                              >
+                                {creating ? 'Creating...' : 'Create Template'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Template Name */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1429,20 +1973,31 @@ const Templates = () => {
 
                       {newTemplate.hasHeader && (
                         <div className="space-y-3 ml-7">
-                          {/* Header Format */}
+                          {/* Header Format — Visual Toggle */}
                           <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Header Format *
-                            </label>
-                            <select
-                              value={newTemplate.headerFormat}
-                              onChange={(e) => setNewTemplate({ ...newTemplate, headerFormat: e.target.value, headerText: '', headerImageFile: null, headerImageHandle: '' })}
-                              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
-                              disabled={creating}
-                            >
-                              <option value="TEXT">Text</option>
-                              <option value="IMAGE">Image</option>
-                            </select>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Header Type *</label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setNewTemplate({ ...newTemplate, headerFormat: 'TEXT', headerText: '', headerImageFile: null, headerImageHandle: '' })}
+                                disabled={creating}
+                                className={`flex flex-col items-center gap-1.5 py-3 px-4 rounded-xl border-2 transition-all ${newTemplate.headerFormat === 'TEXT' ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}`}
+                              >
+                                <span className="text-xl font-bold">T</span>
+                                <span className="text-xs font-semibold">Text</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setNewTemplate({ ...newTemplate, headerFormat: 'IMAGE', headerText: '', headerImageFile: null, headerImageHandle: '' })}
+                                disabled={creating}
+                                className={`flex flex-col items-center gap-1.5 py-3 px-4 rounded-xl border-2 transition-all ${newTemplate.headerFormat === 'IMAGE' ? 'border-yellow-400 bg-yellow-50 text-yellow-700' : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}`}
+                              >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                                <span className="text-xs font-semibold">Image</span>
+                              </button>
+                            </div>
                           </div>
 
                           {/* Header Text Input */}
@@ -1750,13 +2305,20 @@ const Templates = () => {
 
                                     {button.type === 'URL' && (
                                       <div>
-                                        <label className="block text-xs font-medium text-gray-500 mb-1">Website URL</label>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Website URL <span className="text-red-500">*</span></label>
                                         <input
                                           type="url"
                                           value={button.url}
-                                          onChange={(e) => updateButton(button.id, 'url', e.target.value)}
+                                          onChange={(e) => {
+                                            let val = e.target.value;
+                                            if (val && !val.startsWith('https://') && !val.startsWith('http')) {
+                                              val = 'https://' + val;
+                                            }
+                                            updateButton(button.id, 'url', val);
+                                          }}
                                           className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
                                           placeholder="https://example.com"
+                                          required
                                           disabled={creating}
                                         />
                                       </div>
@@ -1764,15 +2326,38 @@ const Templates = () => {
 
                                     {button.type === 'PHONE_NUMBER' && (
                                       <div>
-                                        <label className="block text-xs font-medium text-gray-500 mb-1">Phone Number</label>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Phone Number with Country Code <span className="text-red-500">*</span></label>
                                         <input
                                           type="tel"
                                           value={button.phone_number}
-                                          onChange={(e) => updateButton(button.id, 'phone_number', e.target.value)}
+                                          onChange={(e) => {
+                                            let val = e.target.value.replace(/[^\d+]/g, '');
+                                            if (val.indexOf('+') > 0) val = val.slice(0, 1) + val.slice(1).replace(/\+/g, '');
+                                            updateButton(button.id, 'phone_number', val);
+                                          }}
                                           className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
-                                          placeholder="+911234567890"
+                                          placeholder="+91 98765 43210"
+                                          required
                                           disabled={creating}
                                         />
+                                        <p className="text-xs text-gray-400 mt-1">Include country code, e.g. +91 for India</p>
+                                      </div>
+                                    )}
+
+                                    {button.type === 'QUICK_REPLY' && (
+                                      <div>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Quick Reply Text <span className="text-red-500">*</span></label>
+                                        <input
+                                          type="text"
+                                          value={button.quick_reply_payload || ''}
+                                          onChange={(e) => updateButton(button.id, 'quick_reply_payload', e.target.value)}
+                                          className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
+                                          placeholder="e.g. Yes, I'm interested"
+                                          maxLength={25}
+                                          required
+                                          disabled={creating}
+                                        />
+                                        <p className="text-xs text-gray-400 mt-1">Text sent when recipient taps this button (max 25 chars)</p>
                                       </div>
                                     )}
                                   </div>
@@ -1851,6 +2436,266 @@ const Templates = () => {
                 ) : (
                   /* CAROUSEL TEMPLATE FORM */
                   <div className="space-y-4">
+
+                    {/* ✨ Carousel AI Generator Panel */}
+                    <div className="rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => { setShowCarouselAI(!showCarouselAI); setAiError('') }}
+                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-purple-100/50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">✨</span>
+                          <span className="font-semibold text-purple-800 text-sm">Generate Carousel with AI</span>
+                        </div>
+                        <svg className={`w-4 h-4 text-purple-600 transition-transform ${showCarouselAI ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+
+                      {showCarouselAI && (
+                        <div className="px-4 pb-4 space-y-4 border-t border-purple-200 pt-3">
+
+                          {/* Purpose */}
+                          <div>
+                            <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Campaign Purpose *</label>
+                            <textarea
+                              value={carAiForm.purpose}
+                              onChange={e => setCarAiForm(p => ({ ...p, purpose: e.target.value }))}
+                              placeholder="e.g. Showcase 4 newly developed parks across different wards in the city"
+                              className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent resize-none bg-white"
+                              rows={2}
+                            />
+                          </div>
+
+                          {/* Tone + Language + Button Type */}
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Tone</label>
+                              <select
+                                value={carAiForm.tone}
+                                onChange={e => setCarAiForm(p => ({ ...p, tone: e.target.value }))}
+                                className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 bg-white"
+                              >
+                                <option value="friendly">Friendly</option>
+                                <option value="formal">Formal</option>
+                                <option value="urgent">Urgent</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Language</label>
+                              <select
+                                value={carAiForm.language}
+                                onChange={e => setCarAiForm(p => ({ ...p, language: e.target.value }))}
+                                className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 bg-white"
+                              >
+                                <option value="English">English</option>
+                                <option value="Telugu">Telugu</option>
+                                <option value="Hindi">Hindi</option>
+                              </select>
+                            </div>
+                            <div className="md:col-span-2">
+                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">
+                                Button Types (Max 2) *
+                              </label>
+                              <div className="flex gap-2">
+                                {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(bType => {
+                                  const isSelected = carAiForm.buttonTypes.includes(bType);
+                                  const isDisabled = !isSelected && carAiForm.buttonTypes.length >= 2;
+                                  return (
+                                    <button
+                                      key={bType}
+                                      type="button"
+                                      disabled={isDisabled}
+                                      onClick={() => {
+                                        setCarAiForm(p => {
+                                          if (isSelected) {
+                                            if (p.buttonTypes.length <= 1) return p; // prevent removing last button
+                                            return { ...p, buttonTypes: p.buttonTypes.filter(t => t !== bType) };
+                                          } else {
+                                            return { ...p, buttonTypes: [...p.buttonTypes, bType] };
+                                          }
+                                        });
+                                      }}
+                                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${isSelected
+                                        ? 'bg-purple-600 text-white border-purple-600 shadow-md transform scale-105'
+                                        : isDisabled
+                                          ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed hidden md:block'
+                                          : 'bg-white text-purple-600 border-purple-200 hover:border-purple-400 hover:bg-purple-50'
+                                        }`}
+                                    >
+                                      {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'URL' : 'Phone'}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                          {/* Number of Cards */}
+                          <div>
+                            <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">
+                              Number of Cards: <span className="text-purple-900 font-bold">{carAiForm.numCards}</span>
+                            </label>
+                            <input
+                              type="range"
+                              min={2}
+                              max={10}
+                              value={carAiForm.numCards}
+                              onChange={e => {
+                                const n = parseInt(e.target.value)
+                                setCarAiForm(p => ({
+                                  ...p,
+                                  numCards: n,
+                                  cardTopics: Array(n).fill('').map((_, i) => p.cardTopics[i] || ''),
+                                  cardImages: p.cardImages.slice(0, n),
+                                  cardButtons: Array(n).fill('').map((_, i) => p.cardButtons[i] || []),
+                                }))
+                              }}
+                              className="w-full accent-purple-600"
+                            />
+                            <div className="flex justify-between text-xs text-purple-400 mt-1"><span>2</span><span>10</span></div>
+                          </div>
+
+                          {/* Per-card image uploads + topic hints */}
+                          <div>
+                            <label className="block text-xs font-semibold text-purple-700 mb-2 uppercase tracking-wide">
+                              Card Images + Topic Hints (AI will read each image)
+                            </label>
+                            <div className="space-y-2">
+                              {Array.from({ length: carAiForm.numCards }, (_, i) => (
+                                <div key={i} className="flex gap-2 items-start">
+                                  <div className="flex-shrink-0 w-7 h-7 rounded-full bg-purple-200 text-purple-800 text-xs font-bold flex items-center justify-center mt-1">
+                                    {i + 1}
+                                  </div>
+                                  <div className="flex-1 space-y-1">
+                                    {/* Image upload */}
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <div className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg border-2 border-dashed transition-colors ${carAiForm.cardImages[i] ? 'border-purple-400 bg-purple-50 text-purple-700' : 'border-purple-200 bg-white text-gray-400 hover:border-purple-400 hover:text-purple-600'}`}>
+                                        {carAiForm.cardImages[i] ? (
+                                          <><span>🖼️</span> {carAiForm.cardImages[i].name.slice(0, 20)}{carAiForm.cardImages[i].name.length > 20 ? '…' : ''}</>
+                                        ) : (
+                                          <><span>📁</span> Upload Image *</>
+                                        )}
+                                      </div>
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={e => {
+                                          const file = e.target.files[0]
+                                          if (!file) return
+                                          setCarAiForm(p => {
+                                            const imgs = [...p.cardImages]
+                                            imgs[i] = file
+                                            return { ...p, cardImages: imgs }
+                                          })
+                                        }}
+                                      />
+                                    </label>
+                                    {/* Topic hint */}
+                                    <input
+                                      type="text"
+                                      placeholder={`Card ${i + 1} topic hint (optional)…`}
+                                      value={carAiForm.cardTopics[i] || ''}
+                                      onChange={e => {
+                                        const val = e.target.value
+                                        setCarAiForm(p => {
+                                          const topics = [...p.cardTopics]
+                                          topics[i] = val
+                                          return { ...p, cardTopics: topics }
+                                        })
+                                      }}
+                                      className="w-full px-3 py-1.5 text-xs border border-purple-200 rounded-lg focus:ring-2 focus:ring-purple-400 bg-white"
+                                    />
+
+                                    {/* AI Form Card Buttons */}
+                                    <div className="mt-4 pt-3 border-t border-purple-100">
+                                      <div className="space-y-3">
+                                        {(carAiForm.buttonTypes || []).filter(Boolean).map((bType, btnIdx) => {
+                                          const btnData = carAiForm.cardButtons[i]?.[btnIdx] || { text: '', value: '' };
+
+                                          return (
+                                            <div key={btnIdx} className="flex gap-2 items-start bg-purple-50 p-2.5 rounded-lg border border-purple-100">
+                                              <div className="flex-1 space-y-2">
+                                                <div className="flex items-center justify-between">
+                                                  <div className="font-semibold text-[10px] text-purple-700 uppercase tracking-wider bg-purple-200 px-2 py-0.5 rounded-full">{bType.replace('_', ' ')}</div>
+                                                </div>
+                                                {bType === 'QUICK_REPLY' ? (
+                                                  <input
+                                                    type="text"
+                                                    value={btnData.text}
+                                                    onChange={(e) => updateAiCardButton(i, btnIdx, 'text', e.target.value)}
+                                                    placeholder="Quick reply text (max 25 chars) *"
+                                                    maxLength={25}
+                                                    className="w-full px-2.5 py-1.5 text-xs border border-purple-200 rounded focus:ring-1 focus:ring-purple-400 focus:border-transparent bg-white shadow-sm"
+                                                  />
+                                                ) : (
+                                                  <input
+                                                    type={bType === 'URL' ? 'url' : 'tel'}
+                                                    value={btnData.value}
+                                                    onChange={(e) => {
+                                                      let val = e.target.value;
+                                                      if (bType === 'PHONE_NUMBER') {
+                                                        val = val.replace(/[^\d+]/g, '');
+                                                        if (val.indexOf('+') > 0) val = val.slice(0, 1) + val.slice(1).replace(/\+/g, '');
+                                                      } else if (bType === 'URL') {
+                                                        if (val && !val.startsWith('https://') && !val.startsWith('http')) {
+                                                          val = 'https://' + val;
+                                                        }
+                                                      }
+                                                      updateAiCardButton(i, btnIdx, 'value', val);
+                                                    }}
+                                                    placeholder={bType === 'URL' ? 'https://example.com *' : '+91 98765 43210 *'}
+                                                    className="w-full px-2.5 py-1.5 text-xs border border-purple-200 rounded focus:ring-1 focus:ring-purple-400 focus:border-transparent bg-white shadow-sm"
+                                                  />
+                                                )}
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {aiError && <p className="text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg">{aiError}</p>}
+
+                          <div className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={handleGenerateCarouselTemplate}
+                              disabled={aiGenerating || !carAiForm.purpose.trim()}
+                              className="flex-1 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-sm font-bold rounded-lg hover:from-purple-700 hover:to-indigo-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                            >
+                              {aiGenerating ? (
+                                <>
+                                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                                  Generating Carousel...
+                                </>
+                              ) : (
+                                <><span>✨</span> Generate All Cards</>
+                              )}
+                            </button>
+                            {carouselTemplate.mainBody && carouselTemplate.cards.length > 0 && !aiGenerating && (
+                              <button
+                                type="button"
+                                onClick={handleCreateTemplate}
+                                disabled={creating}
+                                className="flex-1 py-2.5 bg-black text-white text-sm font-bold rounded-lg hover:bg-gray-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                              >
+                                {creating ? 'Creating...' : 'Create Template'}
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-xs text-purple-500 text-center">AI will analyze each image and write contextual copy for all {carAiForm.numCards} cards.</p>
+                        </div>
+                      )}
+                    </div>
+
                     {/* Template Name */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -2119,7 +2964,13 @@ const Templates = () => {
                                         <input
                                           type="url"
                                           value={button.value}
-                                          onChange={(e) => updateCardButton(index, btnIndex, 'value', e.target.value)}
+                                          onChange={(e) => {
+                                            let val = e.target.value;
+                                            if (val && !val.startsWith('https://') && !val.startsWith('http')) {
+                                              val = 'https://' + val;
+                                            }
+                                            updateCardButton(index, btnIndex, 'value', val);
+                                          }}
                                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
                                           placeholder="https://example.com"
                                         />
@@ -2128,7 +2979,11 @@ const Templates = () => {
                                         <input
                                           type="tel"
                                           value={button.value}
-                                          onChange={(e) => updateCardButton(index, btnIndex, 'value', e.target.value)}
+                                          onChange={(e) => {
+                                            let val = e.target.value.replace(/[^\d+]/g, '');
+                                            if (val.indexOf('+') > 0) val = val.slice(0, 1) + val.slice(1).replace(/\+/g, '');
+                                            updateCardButton(index, btnIndex, 'value', val);
+                                          }}
                                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-1 focus:ring-yellow-400 focus:border-transparent"
                                           placeholder="+1234567890"
                                         />
@@ -2201,7 +3056,7 @@ const Templates = () => {
 
                 {/* Preview Column */}
                 <div className="lg:border-l lg:border-gray-200 lg:pl-6">
-                  {renderPreview()}
+                  {templateType === 'standard' ? renderPreview() : renderCarouselPreview()}
                 </div>
               </div>
             </div>
@@ -2214,7 +3069,7 @@ const Templates = () => {
           onClose={() => setShowProfileSettings(false)}
         />
       </div>
-    </PageLoader>
+    </PageLoader >
   )
 }
 

@@ -80,6 +80,27 @@ serve(async (req: Request) => {
             }
         }
 
+        // Helper to construct component with optional examples for variables
+        const createComponentWithExamples = (text: string) => {
+            const component: any = { type: "body", text };
+            const params = text.match(/\{\{(\w+)\}\}/g);
+
+            if (params && params.length > 0) {
+                // Map variable names to realistic examples for Meta
+                const exampleValues = params.map(p => {
+                    const varName = p.replace(/[{}]/g, '');
+                    if (varName === 'first_name') return 'John';
+                    if (varName === 'phone_number') return '+919876543210';
+                    return 'Example'; // fallback
+                });
+
+                component.example = {
+                    body_text: [exampleValues]
+                };
+            }
+            return component;
+        };
+
         // Construct carousel template components
         const carouselCards = cards.map((card: any) => ({
             components: [
@@ -90,10 +111,7 @@ serve(async (req: Request) => {
                         header_handle: [card.headerHandle]
                     }
                 },
-                {
-                    type: "body",
-                    text: card.bodyText
-                },
+                createComponentWithExamples(card.bodyText),
                 {
                     type: "buttons",
                     buttons: card.buttons.map((btn: any) => {
@@ -124,10 +142,7 @@ serve(async (req: Request) => {
             category: category,
             parameter_format: "NAMED",
             components: [
-                {
-                    type: "body",
-                    text: mainBody
-                },
+                createComponentWithExamples(mainBody),
                 {
                     type: "carousel",
                     cards: carouselCards

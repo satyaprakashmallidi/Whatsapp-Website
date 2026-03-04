@@ -114,7 +114,25 @@ export const DataProvider = ({ children }) => {
         console.error('Error fetching campaigns:', campaignsError)
         setCampaigns([])
       } else {
-        setCampaigns(campaignsData || [])
+        // Map database fields to component expectations
+        const mappedCampaigns = campaignsData.map(c => ({
+          id: c.id,
+          name: c.campaign_name,
+          description: c.description,
+          status: c.status,
+          templateName: c.template_name,
+          templateLanguage: c.template_language,
+          audience: c.audience,
+          audienceId: c.audience_id,
+          delivered: c.delivered,
+          failed: c.failed,
+          recipients: c.recipients,
+          createdAt: c.created_at,
+          messageType: c.message_type,
+          // Keep original fields just in case
+          ...c
+        }))
+        setCampaigns(mappedCampaigns)
       }
     } catch (error) {
       console.error('Error fetching user data:', error)
