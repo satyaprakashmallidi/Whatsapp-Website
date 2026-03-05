@@ -112,183 +112,203 @@ serve(async (req: Request) => {
             .update({ status: 'Processing' })
             .eq('id', campaign_id)
 
-        console.log(`📧 Sending messages to ${contacts.length} contacts`)
+        console.log(`📧 Submitting background task to send messages to ${contacts.length} contacts`)
         console.log(`Template: ${templateName}, Language: ${templateLang}`)
-        console.log(`Template structure:`, JSON.stringify(templateStructure, null, 2))
+        // console.log(`Template structure:`, JSON.stringify(templateStructure, null, 2))
 
-        let successCount = 0
-        let failureCount = 0
-        const errors: string[] = []
+        // Trigger the background processing task
+        const backgroundSend = async () => {
+            let successCount = 0
+            let failureCount = 0
+            const errors: string[] = []
 
-        // Send messages to each contact
-        for (const contact of contacts) {
-            const phone = contact.phone || contact.mobile || contact.whatsapp
-            console.log(`\n👤 Processing contact:`, contact.name, phone)
+            for (const contact of contacts) {
+                const phone = contact.phone || contact.mobile || contact.whatsapp
+                console.log(`\n👤 Processing contact:`, contact.name, phone)
 
-            if (!phone) {
-                failureCount++
-                errors.push(`No phone number for contact: ${contact.name || 'Unknown'}`)
-                console.log(`❌ No phone number`)
-                continue
-            }
-
-            // Build message payload
-            const payload: any = {
-                messaging_product: "whatsapp",
-                recipient_type: "individual",
-                to: phone,
-                type: "template",
-                template: {
-                    name: templateName,
-                    language: {
-                        code: templateLang
-                    }
-                }
-            }
-
-            // Add components if template structure exists
-            if (templateStructure) {
-                const components: any[] = []
-
-                // Add header if exists - use uploaded media ID from campaign
-                if (templateStructure.hasHeader && campaign.header_media_id) {
-                    components.push({
-                        type: "header",
-                        parameters: [{
-                            type: templateStructure.headerType,
-                            [templateStructure.headerType]: {
-                                id: campaign.header_media_id  // Use uploaded Media ID
-                            }
-                        }]
-                    })
-                }
-
-                // Add body parameters if exist
-                if (templateStructure.bodyParameters && templateStructure.bodyParameters.length > 0) {
-                    const bodyParams = templateStructure.bodyParameters.map((param: any) => {
-                        const paramObj: any = {
-                            type: "text",
-                            text: contact.name || "Customer"
-                        }
-
-                        // Add parameter_name for NAMED parameters
-                        if (param.name) {
-                            paramObj.parameter_name = param.name
-                        }
-
-                        return paramObj
-                    })
-
-                    components.push({
-                        type: "body",
-                        parameters: bodyParams
-                    })
-                }
-
-                // Add carousel component if exists
-                if (templateStructure.hasCarousel && templateStructure.carouselCards) {
-                    const cards = templateStructure.carouselCards.map((card: any, idx: number) => {
-                        const cardMediaId = campaign.card_media_ids?.[idx] || campaign.card_media_ids?.[String(idx)]
-
-                        const cardComponents: any[] = []
-
-                        // Add card header if it's an image and we have a media ID
-                        if (card.hasHeader && card.headerFormat === 'IMAGE' && cardMediaId) {
-                            cardComponents.push({
-                                type: "header",
-                                parameters: [{
-                                    type: "image",
-                                    image: {
-                                        id: cardMediaId
-                                    }
-                                }]
-                            })
-                        }
-
-                        // Add card body parameters if they exist 
-                        // Note: For now assuming no dynamic variables in card body or using contact name if needed
-                        // Meta allows card body too, but we need to check if we support variables there
-
-                        return {
-                            card_index: idx,
-                            components: cardComponents
-                        }
-                    })
-
-                    components.push({
-                        type: "carousel",
-                        cards: cards
-                    })
-                }
-
-                if (components.length > 0) {
-                    payload.template.components = components
-                }
-            }
-
-            console.log(`📤 Sending payload:`, JSON.stringify(payload, null, 2))
-
-            // Send message via WhatsApp API
-            try {
-                const response = await fetch(
-                    `https://graph.facebook.com/v20.0/${userData.meta_phone_number_id}/messages`,
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${userData.meta_access_token}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(payload)
-                    }
-                )
-
-                if (response.ok) {
-                    successCount++
-                    console.log(`✅ Message sent successfully!`)
-                } else {
-                    const error = await response.json()
+                if (!phone) {
                     failureCount++
-                    console.log(`❌ WhatsApp API error:`, JSON.stringify(error, null, 2))
-                    errors.push(`Failed to send to ${phone}: ${JSON.stringify(error)}`)
+                    errors.push(`No phone number for contact: ${contact.name || 'Unknown'}`)
+                    console.log(`❌ No phone number`)
+                    continue
                 }
-            } catch (error) {
-                failureCount++
-                console.log(`❌ Exception:`, error)
-                errors.push(`Exception sending to ${phone}: ${error instanceof Error ? error.message : 'Unknown'}`)
+
+                // Build message payload
+                const payload: any = {
+                    messaging_product: "whatsapp",
+                    recipient_type: "individual",
+                    to: phone,
+                    type: "template",
+                    template: {
+                        name: templateName,
+                        language: {
+                            code: templateLang
+                        }
+                    }
+                }
+
+                // Add components if template structure exists
+                if (templateStructure) {
+                    const components: any[] = []
+
+                    // Add header if exists - use uploaded media ID from campaign
+                    if (templateStructure.hasHeader && campaign.header_media_id) {
+                        components.push({
+                            type: "header",
+                            parameters: [{
+                                type: templateStructure.headerType,
+                                [templateStructure.headerType]: {
+                                    id: campaign.header_media_id  // Use uploaded Media ID
+                                }
+                            }]
+                        })
+                    }
+
+                    // Add body parameters if exist
+                    if (templateStructure.bodyParameters && templateStructure.bodyParameters.length > 0) {
+                        const bodyParams = templateStructure.bodyParameters.map((param: any) => {
+                            const paramObj: any = {
+                                type: "text",
+                                text: contact.name || "Customer"
+                            }
+
+                            // Add parameter_name for NAMED parameters
+                            if (param.name) {
+                                paramObj.parameter_name = param.name
+                            }
+
+                            return paramObj
+                        })
+
+                        components.push({
+                            type: "body",
+                            parameters: bodyParams
+                        })
+                    }
+
+                    // Add carousel component if exists
+                    if (templateStructure.hasCarousel && templateStructure.carouselCards) {
+                        const cards = templateStructure.carouselCards.map((card: any, idx: number) => {
+                            const cardMediaId = campaign.card_media_ids?.[idx] || campaign.card_media_ids?.[String(idx)]
+
+                            const cardComponents: any[] = []
+
+                            // Add card header if it's an image and we have a media ID
+                            if (card.hasHeader && card.headerFormat === 'IMAGE' && cardMediaId) {
+                                cardComponents.push({
+                                    type: "header",
+                                    parameters: [{
+                                        type: "image",
+                                        image: {
+                                            id: cardMediaId
+                                        }
+                                    }]
+                                })
+                            }
+
+                            // Add card body parameters if they exist 
+                            // Note: For now assuming no dynamic variables in card body or using contact name if needed
+                            // Meta allows card body too, but we need to check if we support variables there
+
+                            return {
+                                card_index: idx,
+                                components: cardComponents
+                            }
+                        })
+
+                        components.push({
+                            type: "carousel",
+                            cards: cards
+                        })
+                    }
+
+                    if (components.length > 0) {
+                        payload.template.components = components
+                    }
+                }
+
+                console.log(`📤 Sending payload:`, JSON.stringify(payload, null, 2))
+
+                // Send message via WhatsApp API
+                try {
+                    const response = await fetch(
+                        `https://graph.facebook.com/v20.0/${userData.meta_phone_number_id}/messages`,
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${userData.meta_access_token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(payload)
+                        }
+                    )
+
+                    if (response.ok) {
+                        successCount++
+                        console.log(`✅ Message sent successfully!`)
+                    } else {
+                        const error = await response.json()
+                        failureCount++
+                        console.log(`❌ WhatsApp API error:`, JSON.stringify(error, null, 2))
+                        errors.push(`Failed to send to ${phone}: ${JSON.stringify(error)}`)
+                    }
+                } catch (error) {
+                    failureCount++
+                    console.log(`❌ Exception:`, error)
+                    errors.push(`Exception sending to ${phone}: ${error instanceof Error ? error.message : 'Unknown'}`)
+                }
+
+                // Rate limiting: Wait 100ms between messages (~10 messages/second, well within 80/sec limit)
+                await delay(100)
+            } // End of contact loop
+
+            console.log(`\n📊 Final Results: ${successCount} sent, ${failureCount} failed`)
+            if (errors.length > 0) console.log(`Errors:`, errors)
+
+            // Update campaign status
+            const finalStatus = failureCount > 0 ? 'Failed' : 'Completed'
+            console.log(`\n📝 Updating campaign status to: ${finalStatus}`)
+            const { error: updateError } = await supabaseClient
+                .from('Campaigns')
+                .update({
+                    status: finalStatus,
+                    delivered: successCount,
+                    failed: failureCount,
+                    sent_date: new Date().toISOString()
+                })
+                .eq('id', campaign_id)
+
+            if (updateError) {
+                console.error('❌ Error updating campaign status:', updateError)
+            } else {
+                console.log('✅ Campaign status updated successfully')
             }
+        } // End of backgroundSend
 
-            // Rate limiting: Wait 100ms between messages (~10 messages/second, well within 80/sec limit)
-            await delay(100)
-        }
-
-        console.log(`\n📊 Final Results: ${successCount} sent, ${failureCount} failed`)
-        console.log(`Errors:`, errors)
-
-        // Update campaign status
-        const finalStatus = failureCount > 0 ? 'Failed' : 'Completed'
-        console.log(`\n📝 Updating campaign status to: ${finalStatus}`)
-        const { error: updateError } = await supabaseClient
-            .from('Campaigns')
-            .update({
-                status: finalStatus,
-                delivered: successCount,
-                failed: failureCount,
-                sent_date: new Date().toISOString()
-            })
-            .eq('id', campaign_id)
-
-        if (updateError) {
-            console.error('❌ Error updating campaign status:', updateError)
+        // Use EdgeRuntime.waitUntil if available (Deno in Supabase) to keep execution alive
+        // after returning the response
+        if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
+            EdgeRuntime.waitUntil(backgroundSend().catch(err => {
+                console.error('Background send utterly failed:', err);
+            }));
+        } else if (typeof (globalThis as any).waitUntil === 'function') {
+            (globalThis as any).waitUntil(backgroundSend().catch(err => {
+                console.error('Background send utterly failed:', err);
+            }));
         } else {
-            console.log('✅ Campaign status updated successfully')
+            // Fallback for local testing or unsupported environments, 
+            // just run returning promise without awaiting. 
+            // Note: Deno might kill this if the event loop goes idle.
+            backgroundSend().catch(err => {
+                console.error('Background send utterly failed:', err);
+            });
         }
 
         return new Response(
             JSON.stringify({
                 success: true,
-                delivered: successCount,
-                failed: failureCount,
-                errors: errors.slice(0, 10) // Only return first 10 errors
+                status: "Processing",
+                message: "Campaign queued for background delivery"
             }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 }
         )

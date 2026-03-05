@@ -84,7 +84,7 @@ const Sidebar = () => {
   }
 
   return (
-    <div className={`bg-[#1F1F1F] text-white h-screen flex flex-col transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
+    <div className={`hidden lg:flex bg-[#1F1F1F] text-white h-screen flex-col transition-all duration-300 ${isCollapsed ? 'w-20' : 'w-64'}`}>
       {/* Header with Logo and Collapse Toggle */}
       <div className="p-4 flex items-center justify-between border-b border-gray-800">
         {!isCollapsed && (
@@ -114,8 +114,8 @@ const Sidebar = () => {
               key={item.path}
               to={item.path}
               className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${isActive
-                  ? 'bg-[#FFC107] text-gray-900'
-                  : 'text-gray-300 hover:bg-gray-800'
+                ? 'bg-[#FFC107] text-gray-900'
+                : 'text-gray-300 hover:bg-gray-800'
                 }`}
               title={isCollapsed ? item.name : ''}
             >

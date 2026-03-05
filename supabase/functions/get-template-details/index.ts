@@ -136,6 +136,8 @@ serve(async (req: Request) => {
                     index,
                     hasHeader: !!cardHeader,
                     headerFormat: cardHeader?.format,
+                    headerMediaId: cardHeader?.example?.header_handle?.[0] || null,
+                    headerImageUrl: cardHeader?.example?.header_url?.[0] || null,
                     bodyText: cardBody?.text,
                     hasButtons: !!cardButtons,
                     buttons: cardButtons?.buttons || []

@@ -563,6 +563,11 @@ export const DataProvider = ({ children }) => {
         throw new Error('Not authenticated')
       }
 
+      // Optimistic UI Update: Set status to processing immediately so it shows up in "In Progress" tab
+      await updateCampaign(id, { status: 'Processing' })
+
+      // Note: we do NOT await this locally in the frontend flow for "Start Campaign", 
+      // but if we did, this promise resolves when the backend is done.
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-campaign-messages`, {
         method: 'POST',
         headers: {
@@ -576,6 +581,8 @@ export const DataProvider = ({ children }) => {
 
       if (!response.ok) {
         console.error('Edge function error:', data)
+        // Revert status on failure
+        await updateCampaign(id, { status: 'Failed' })
         throw new Error(data.error || 'Failed to send campaign')
       }
 
