@@ -30,10 +30,7 @@ const Campaigns = () => {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [templateStructure, setTemplateStructure] = useState(null)
   const [fetchingTemplate, setFetchingTemplate] = useState(false)
-  const [uploadedImage, setUploadedImage] = useState(null)
-  const [uploadedMediaId, setUploadedMediaId] = useState(null)
-  const [uploadingImage, setUploadingImage] = useState(false)
-  const [cardMedia, setCardMedia] = useState({}) // { cardIndex: { file, mediaId, uploading } }
+
 
   const handleCreateCampaign = async (e, action = 'draft') => {
     e.preventDefault()
@@ -51,36 +48,39 @@ const Campaigns = () => {
         console.log('✅ Fresh template structure:', freshTemplateStructure)
       }
 
+      // Derive media IDs from the freshly fetched template structure (Meta defaults)
+      // Only use numeric handle IDs — skip URLs which the WhatsApp API will reject
+      const isValidHandle = (id) => !!id && !String(id).startsWith('http')
+      const templateHeaderMediaId = isValidHandle(freshTemplateStructure?.headerHandleId) ? freshTemplateStructure.headerHandleId : null
+      const templateCardMediaIds = freshTemplateStructure?.carouselCards?.reduce((acc, card, idx) => {
+        if (isValidHandle(card.headerMediaId)) acc[idx] = card.headerMediaId
+        return acc
+      }, {}) || {}
+
       // Create Campaign in DB (Draft initially)
       const createdCampaign = await addCampaign({
         ...newCampaign,
         audience: selectedAudience ? selectedAudience.name : 'All Contacts',
         templateName: selectedTemplate ? selectedTemplate.name : '',
         templateLanguage: selectedTemplate ? selectedTemplate.language : 'en_US',
-        templateStructure: freshTemplateStructure, // Use freshly fetched structure
-        headerMediaId: uploadedMediaId, // Include uploaded media ID
-        cardMediaIds: Object.keys(cardMedia).reduce((acc, current) => {
-          if (cardMedia[current].mediaId) acc[current] = cardMedia[current].mediaId
-          return acc
-        }, {}),
+        templateStructure: freshTemplateStructure,
+        headerMediaId: templateHeaderMediaId,
+        cardMediaIds: templateCardMediaIds,
         message: selectedTemplate ? selectedTemplate.content : '',
         messageType: selectedTemplate ? selectedTemplate.type : 'text'
       })
 
       if (createdCampaign && action === 'send') {
-        // Asynchronous trigger: we don't await sendCampaign here, let it run in the background
         setSendingCampaignId(createdCampaign.id)
-        sendCampaign(createdCampaign.id).then(() => {
-          setSendingCampaignId(null)
-        }).catch(err => {
-          console.error('Background send failed:', err)
-          setSendingCampaignId(null)
-        })
-
-        // Notify user that campaign is processing
+        try {
+          await sendCampaign(createdCampaign.id)
+        } catch (err) {
+          console.error('Send failed:', err)
+        }
+        setSendingCampaignId(null)
         showAlert({
-          title: 'Campaign Started',
-          message: 'Campaign started! It is now running in the background and has been moved to the "In Progress" tab.',
+          title: 'Campaign Sent! 🚀',
+          message: 'Your campaign was sent successfully.',
           type: 'success'
         })
       } else {
@@ -94,9 +94,6 @@ const Campaigns = () => {
       // Reset all state after campaign creation and close modal immediately
       setNewCampaign({ name: '', description: '', templateId: '', templateName: '', audienceId: '', audience: '' })
       setTemplateStructure(null)
-      setUploadedImage(null)
-      setUploadedMediaId(null)
-      setCardMedia({})
       setShowNewCampaign(false)
     } catch (error) {
       console.error("Error creating/sending campaign:", error)
@@ -124,10 +121,7 @@ const Campaigns = () => {
     console.log('📝 Template name that will be fetched:', selectedTemplate?.name)
     console.log('🌐 Template language that will be used:', selectedTemplate?.language)
 
-    // Reset uploaded image state when template changes
-    setUploadedImage(null)
-    setUploadedMediaId(null)
-    setCardMedia({}) // Reset carousel media
+
 
     setNewCampaign({
       ...newCampaign,
@@ -200,15 +194,7 @@ const Campaigns = () => {
       }
     }
 
-    // Set media if available
-    setUploadedMediaId(campaign.header_media_id || null)
-    if (campaign.card_media_ids) {
-      const media = {}
-      Object.entries(campaign.card_media_ids).forEach(([index, mediaId]) => {
-        media[index] = { mediaId }
-      })
-      setCardMedia(media)
-    }
+
 
     setShowNewCampaign(true)
   }
@@ -223,123 +209,11 @@ const Campaigns = () => {
     })
   }
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
 
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      // Error will be shown in UI
-      return
-    }
-
-    // Validate file size (max 5MB for WhatsApp)
-    if (file.size > 5 * 1024 * 1024) {
-      // Error will be shown in UI
-      return
-    }
-
-    setUploadingImage(true)
-    setUploadedImage(file)
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
-
-      if (!token) {
-        console.error('Not authenticated')
-        return
-      }
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-media`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          body: formData
-        }
-      )
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Upload failed')
-      }
-
-      console.log('✅ Image uploaded! Media ID:', data.media_id)
-      setUploadedMediaId(data.media_id)
-      // Success message shown in UI below
-
-    } catch (error) {
-      console.error('Upload error:', error)
-      // Error will be shown in UI
-      setUploadedImage(null)
-    } finally {
-      setUploadingImage(false)
-    }
-  }
-
-  const handleCardImageUpload = async (e, cardIndex) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    // Validate file type
-    if (!file.type.startsWith('image/')) return
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) return
-
-    setCardMedia(prev => ({
-      ...prev,
-      [cardIndex]: { ...prev[cardIndex], file, uploading: true }
-    }))
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const token = session?.access_token
-      if (!token) return
-
-      const formData = new FormData()
-      formData.append('file', file)
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/upload-media`,
-        {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` },
-          body: formData
-        }
-      )
-
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Upload failed')
-
-      console.log(`✅ Image uploaded for card ${cardIndex}! Media ID:`, data.media_id)
-      setCardMedia(prev => ({
-        ...prev,
-        [cardIndex]: { file, mediaId: data.media_id, uploading: false }
-      }))
-
-    } catch (error) {
-      console.error(`Upload error for card ${cardIndex}:`, error)
-      setCardMedia(prev => {
-        const next = { ...prev }
-        delete next[cardIndex]
-        return next
-      })
-    }
-  }
 
   const handleCancelCampaign = () => {
     setNewCampaign({ name: '', description: '', templateId: '', templateName: '', audienceId: '', audience: '' })
     setTemplateStructure(null)
-    setUploadedImage(null)
-    setUploadedMediaId(null)
-    setCardMedia({})
     setShowNewCampaign(false)
   }
 
@@ -610,11 +484,11 @@ const Campaigns = () => {
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 relative flex-1 overflow-hidden min-h-0">
                 {/* Form Column */}
-                <div className="p-5 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300">
-                  <form onSubmit={handleCreateCampaign}>
-                    <h3 className="text-base font-semibold text-gray-900 mb-3">Campaign Details</h3>
+                <div className="p-5 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 flex flex-col h-full">
+                  <form onSubmit={handleCreateCampaign} className="flex flex-col flex-1">
+                    <h3 className="text-base font-semibold text-gray-900 mb-3 shrink-0">Campaign Details</h3>
 
-                    <div className="space-y-3 mb-4">
+                    <div className="space-y-3 mb-4 flex-1">
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1.5">
                           Campaign Name *
@@ -672,105 +546,15 @@ const Campaigns = () => {
                           required
                         >
                           <option value="">Select a template</option>
-                          {templates.map(template => (
-                            <option key={template.id} value={template.id}>
-                              {template.name} ({template.type})
-                            </option>
-                          ))}
+                          {templates
+                            .filter(template => template.status?.toLowerCase() === 'approved')
+                            .map(template => (
+                              <option key={template.id} value={template.id}>
+                                {template.name} ({template.language || 'en_US'}) - {template.type}
+                              </option>
+                            ))}
                         </select>
                       </div>
-                      {/* Carousel Card Images Upload */}
-                      {templateStructure && (templateStructure.hasCarousel || templateStructure.components?.find(c => c.type === 'CAROUSEL')) && (() => {
-                        const carouselComp = templateStructure.hasCarousel
-                          ? { cards: templateStructure.carouselCards.map(c => ({ components: [{ type: 'BODY', text: c.bodyText }] })) } // Fallback structure for preview
-                          : templateStructure.components.find(c => c.type === 'CAROUSEL');
-
-                        const cards = templateStructure.carouselCards || carouselComp?.cards || [];
-
-                        if (cards.length === 0) {
-                          console.warn('⚠️ Carousel template detected but no cards found in structure:', templateStructure);
-                          return null;
-                        }
-
-                        const uploadedCount = Object.keys(cardMedia).filter(key => cardMedia[key]?.mediaId).length;
-                        const allUploaded = uploadedCount === cards.length;
-
-                        return (
-                          <div className="space-y-4">
-                            <div className={`border rounded-xl p-5 ${allUploaded ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
-                              <div className="flex items-start gap-4 mb-5">
-                                <div className={`p-2 rounded-lg ${allUploaded ? 'bg-green-500' : 'bg-amber-500'}`}>
-                                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 002 2v12a2 2 0 002 2z" />
-                                  </svg>
-                                </div>
-                                <div className="flex-1">
-                                  <h4 className={`text-base font-bold ${allUploaded ? 'text-green-900' : 'text-amber-900'}`}>
-                                    Carousel Images {allUploaded ? 'Ready' : 'Required'}
-                                  </h4>
-                                  <p className={`text-sm ${allUploaded ? 'text-green-700' : 'text-amber-700'}`}>
-                                    {allUploaded
-                                      ? 'All card images have been uploaded successfully.'
-                                      : `Please upload images for all cards. Currently ${uploadedCount} of ${cards.length} uploaded.`}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                {cards.map((card, index) => {
-                                  const isUploaded = !!cardMedia[index]?.mediaId;
-                                  const isUploading = cardMedia[index]?.uploading;
-                                  const cardBodyText = card.bodyText || card.components?.find(c => c.type === 'BODY')?.text;
-
-                                  return (
-                                    <div key={index} className={`p-4 rounded-lg border transition-all ${isUploaded ? 'bg-white border-green-200 shadow-sm' : 'bg-white/50 border-gray-200 border-dashed'}`}>
-                                      <div className="flex items-center justify-between mb-3">
-                                        <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Card #{index + 1}</span>
-                                        {isUploaded ? (
-                                          <span className="flex items-center text-[10px] font-bold text-green-600 uppercase">
-                                            <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                            </svg>
-                                            Uploaded
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] font-bold text-amber-600 uppercase">Missing Photo</span>
-                                        )}
-                                      </div>
-
-                                      {/* Card Text Preview */}
-                                      <div className="mb-3 p-2 bg-gray-50 rounded border border-gray-100 min-h-[40px]">
-                                        <p className="text-[10px] text-gray-500 line-clamp-2 italic">
-                                          {cardBodyText || 'No text content'}
-                                        </p>
-                                      </div>
-
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => handleCardImageUpload(e, index)}
-                                        disabled={isUploading || isSubmitting}
-                                        className="block w-full text-[10px] text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-[10px] file:font-bold file:bg-[#FFC107] file:text-gray-900 hover:file:bg-[#FFB300] file:cursor-pointer disabled:opacity-50"
-                                      />
-
-                                      {isUploading && (
-                                        <div className="mt-2 flex items-center text-[10px] text-blue-600 font-medium">
-                                          <svg className="animate-spin h-3 w-3 mr-1.5" fill="none" viewBox="0 0 24 24">
-                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                          </svg>
-                                          Uploading to Meta...
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-
                       {/* Loading indicator while fetching template */}
                       {fetchingTemplate && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -784,55 +568,20 @@ const Campaigns = () => {
                         </div>
                       )}
 
-                      {/* Image Upload for Templates with Image Header */}
-                      {templateStructure && templateStructure.hasHeader && templateStructure.headerType === 'image' && !templateStructure.hasCarousel && (
-                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                          <div className="flex items-start gap-2 mb-3">
-                            <svg className="w-5 h-5 text-amber-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                            </svg>
-                            <div className="flex-1">
-                              <p className="text-sm font-medium text-amber-800 mb-1">Image Header Required</p>
-                              <p className="text-xs text-amber-700 mb-3">
-                                This template includes an image header. Please upload the same image used in your WhatsApp template.
-                              </p>
-
-                              <label className="block">
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={handleImageUpload}
-                                  disabled={uploadingImage}
-                                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-yellow-500 file:text-white hover:file:bg-yellow-600 file:cursor-pointer disabled:opacity-50"
-                                />
-                              </label>
-
-                              {uploadingImage && (
-                                <p className="text-sm text-blue-600 mt-2 flex items-center gap-2">
-                                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                  </svg>
-                                  Uploading image...
-                                </p>
-                              )}
-
-                              {uploadedMediaId && (
-                                <p className="text-sm text-green-600 mt-2 flex items-center gap-2">
-                                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                  </svg>
-                                  Image uploaded successfully! Media ID: {uploadedMediaId}
-                                </p>
-                              )}
-                            </div>
-                          </div>
+                      {/* Template media info banner (images are auto-applied from Meta) */}
+                      {templateStructure && (templateStructure.hasHeader || templateStructure.hasCarousel) && !fetchingTemplate && (
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-center gap-2">
+                          <svg className="w-4 h-4 text-green-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                          </svg>
+                          <p className="text-xs text-green-700 font-medium">Template media will be applied automatically from Meta.</p>
                         </div>
                       )}
 
-                    </div>
 
-                    <div className="flex justify-end space-x-2 pt-5 border-t border-gray-200 mt-6">
+
+                    </div>
+                    <div className="flex justify-end space-x-2 pt-5 border-t border-gray-200 mt-auto shrink-0">
                       <button
                         type="button"
                         onClick={handleCancelCampaign}
@@ -855,16 +604,19 @@ const Campaigns = () => {
                           isSubmitting ||
                           !newCampaign.name ||
                           !newCampaign.audienceId ||
-                          !newCampaign.templateId ||
-                          // If template has image header, require uploaded media ID
-                          (templateStructure?.hasHeader && templateStructure?.headerType === 'image' && !uploadedMediaId) ||
-                          // If template has carousel, require all card images
-                          (templateStructure?.hasCarousel &&
-                            templateStructure.carouselCards?.some((_, idx) => !cardMedia[idx]?.mediaId))
+                          !newCampaign.templateId
                         }
                         className="px-4 py-2 text-sm bg-yellow-500 text-white font-medium rounded-lg hover:bg-yellow-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed disabled:text-gray-500"
                       >
-                        {sendingCampaignId ? 'Sending...' : 'Start Campaign'}
+                        {isSubmitting && sendingCampaignId ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Sending Campaign...
+                          </>
+                        ) : isSubmitting ? 'Creating...' : 'Start Campaign'}
                       </button>
                     </div>
                   </form>
@@ -888,8 +640,8 @@ const Campaigns = () => {
                           bodyText: templateStructure.components?.find(c => c.type === 'BODY' || c.type === 'body')?.text || '',
                           hasHeader: templateStructure.hasHeader,
                           headerFormat: templateStructure.headerType?.toUpperCase(),
-                          headerImageUrl: uploadedImage ? URL.createObjectURL(uploadedImage) : '',
-                          headerMediaId: uploadedMediaId || templateStructure.headerHandleId, // Pass media ID for draft previews or fallback to template handle
+                          headerImageUrl: '',
+                          headerMediaId: templateStructure.headerHandleId,
                           headerText: templateStructure.components?.find(c => c.type === 'HEADER' && c.format === 'TEXT')?.text || '',
                           hasFooter: !!templateStructure.components?.find(c => c.type === 'FOOTER'),
                           footerText: templateStructure.components?.find(c => c.type === 'FOOTER')?.text || '',
@@ -901,9 +653,8 @@ const Campaigns = () => {
                           })) || [],
                           // For carousel templates
                           mainBody: templateStructure.components?.find(c => c.type === 'CAROUSEL')?.cards?.[0]?.components?.find(c => c.type === 'BODY')?.text ? templateStructure.components?.find(c => c.type === 'BODY')?.text : '', // Meta returns carousel body differently sometimes, fallback to main body component
-                          cards: templateStructure.carouselCards?.map((card, idx) => ({
-                            headerImageFile: cardMedia[idx]?.file,
-                            headerMediaId: cardMedia[idx]?.mediaId || card.headerMediaId || card.headerImageUrl, // Pass carousel media IDs or fallback to template handles
+                          cards: templateStructure.carouselCards?.map((card) => ({
+                            headerMediaId: card.headerMediaId || card.headerImageUrl,
                             bodyText: card.bodyText || card.components?.find(c => c.type === 'BODY')?.text || '',
                             buttons: card.components?.find(c => c.type === 'BUTTONS')?.buttons?.map(b => ({
                               type: b.type,
@@ -920,18 +671,18 @@ const Campaigns = () => {
                     )}
                   </div>
                 </div>
-              </div>
-            </div>
-          </div>
+              </div >
+            </div >
+          </div >
         )}
-      </div>
+      </div >
 
       {/* Profile Settings Modal */}
-      <ProfileSettings
+      < ProfileSettings
         isOpen={showProfileSettings}
         onClose={() => setShowProfileSettings(false)}
       />
-      <AlertComponent />
+      < AlertComponent />
     </PageLoader >
   )
 }

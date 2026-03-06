@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useData } from '../context/DataContext'
 import { supabase } from '../lib/supabase'
 import PageLoader from '../components/PageLoader'
@@ -7,10 +7,12 @@ import CredentialsWarning from '../components/CredentialsWarning'
 import ProfileSettings from '../components/ProfileSettings'
 import TemplatePreview from '../components/TemplatePreview'
 import { generateStandardTemplate, generateCarouselTemplate } from '../services/geminiService'
+import { useSearchParams } from 'react-router-dom'
 
 const Templates = () => {
   const { templates, addTemplate, deleteTemplate, fetchWhatsAppTemplateDetails } = useData()
   const { showAlert, AlertComponent } = useAlert()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [showProfileSettings, setShowProfileSettings] = useState(false)
   const [templateType, setTemplateType] = useState('standard') // 'standard' or 'carousel'
@@ -93,6 +95,20 @@ const Templates = () => {
   const textareaRef = useRef(null)
   const headerTextareaRef = useRef(null)
   const footerTextareaRef = useRef(null)
+
+  // Listen for deep-links from Reports page
+  useEffect(() => {
+    const openCarousel = searchParams.get('openCarouselAI')
+    if (openCarousel === 'true') {
+      setShowCreateForm(true)
+      setTemplateType('carousel')
+
+      // Clean up URL so refresh doesn't keep opening it
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete('openCarouselAI')
+      setSearchParams(newParams, { replace: true })
+    }
+  }, [])
 
   // Filter templates by status (default to 'approved' for backward compatibility)
   const approvedTemplates = templates.filter(t => !t.status || t.status === 'approved')

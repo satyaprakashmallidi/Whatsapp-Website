@@ -10,8 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.91.0",
-    "jspdf": "^4.0.0",
+    "@supabase/supabase-js": "^2.98.0",
+    "dotenv": "^17.3.1",
     "jspdf-autotable": "^5.0.7",
     "papaparse": "^5.5.3",
     "react": "^18.3.1",

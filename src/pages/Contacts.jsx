@@ -11,7 +11,14 @@ const Contacts = () => {
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState('')
   const [importSuccess, setImportSuccess] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const fileInputRef = useRef(null)
+
+  const filteredContacts = contacts.filter(contact =>
+    contact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    contact.phone.includes(searchQuery) ||
+    contact.email.toLowerCase().includes(searchQuery.toLowerCase())
+  )
 
   // Debug: Log contacts
   console.log('Contacts:', contacts, 'Loading:', loading)
@@ -223,6 +230,24 @@ Sarah Johnson,\t+14155551235,sarah.johnson@example.com`
           </div>
         </div>
 
+        {/* Search Bar */}
+        <div className="mb-6 lg:mb-8">
+          <div className="relative max-w-xl">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-yellow-400 focus:border-yellow-400 sm:text-sm shadow-sm transition-all text-gray-900"
+              placeholder="Search by name, phone number, or email..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        </div>
+
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -279,7 +304,7 @@ Sarah Johnson,\t+14155551235,sarah.johnson@example.com`
           <>
             {/* Mobile View (Profile Cards) */}
             <div className="lg:hidden grid grid-cols-1 gap-4">
-              {contacts.map((contact, idx) => {
+              {filteredContacts.map((contact, idx) => {
                 const colors = ['bg-blue-100 text-blue-700', 'bg-purple-100 text-purple-700', 'bg-green-100 text-green-700', 'bg-pink-100 text-pink-700', 'bg-indigo-100 text-indigo-700'];
                 const colorClass = colors[idx % colors.length];
                 return (
@@ -367,7 +392,7 @@ Sarah Johnson,\t+14155551235,sarah.johnson@example.com`
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {contacts.map((contact) => (
+                  {filteredContacts.map((contact) => (
                     <tr key={contact.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center">

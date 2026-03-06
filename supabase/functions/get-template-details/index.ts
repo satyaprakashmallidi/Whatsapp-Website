@@ -127,6 +127,14 @@ serve(async (req: Request) => {
         const carouselComponent = components.find((c: any) => c.type.toUpperCase() === 'CAROUSEL')
         if (carouselComponent && carouselComponent.cards) {
             structure.hasCarousel = true
+
+            // Debug: log raw carousel card header examples to see what Meta provides
+            console.log('🎠 Raw carousel card header examples:', JSON.stringify(
+                carouselComponent.cards.map((c: any) => ({
+                    header_format: c.components.find((x: any) => x.type.toUpperCase() === 'HEADER')?.format,
+                    header_example: c.components.find((x: any) => x.type.toUpperCase() === 'HEADER')?.example
+                })), null, 2))
+
             structure.carouselCards = carouselComponent.cards.map((card: any, index: number) => {
                 const cardHeader = card.components.find((c: any) => c.type.toUpperCase() === 'HEADER')
                 const cardBody = card.components.find((c: any) => c.type.toUpperCase() === 'BODY')

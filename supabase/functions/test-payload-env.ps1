@@ -1,0 +1,1 @@
+$env:VITE_SUPABASE_URL="https://cxmolmsrnofplxvsqsdp.supabase.co"; $env:VITE_SUPABASE_ANON_KEY="..."
