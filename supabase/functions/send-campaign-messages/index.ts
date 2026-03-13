@@ -180,7 +180,33 @@ serve(async (req: Request) => {
             // Meta's template API gives us CDN URLs in header_handle, not numeric IDs.
             // We must download and re-upload each to get a proper numeric media handle.
             const resolvedCardMediaIds: Record<number, string> = {}
+            let resolvedStandardHeaderId: string | null = null
 
+            if (templateStructure?.hasHeader) {
+                console.log(`\n🖼️ Pre-processing standard template header...`)
+                const headerImageUrl = campaign.header_media_id || templateStructure.headerHandleId
+
+                if (headerImageUrl) {
+                    const isUrl = String(headerImageUrl).startsWith('http')
+
+                    if (isUrl) {
+                        const numericId = await uploadImageToMeta(
+                            headerImageUrl,
+                            userData.meta_phone_number_id,
+                            userData.meta_access_token
+                        )
+                        if (numericId) {
+                            resolvedStandardHeaderId = numericId
+                            console.log(`✅ Standard header resolved to media ID: ${numericId}`)
+                        } else {
+                            console.warn(`⚠️ Could not get media ID for standard header, header will be omitted`)
+                        }
+                    } else {
+                        resolvedStandardHeaderId = String(headerImageUrl)
+                        console.log(`✅ Standard header already has numeric ID: ${headerImageUrl}`)
+                    }
+                }
+            }
             if (templateStructure?.hasCarousel && templateStructure.carouselCards) {
                 console.log(`\n🎠 Pre-processing carousel card images...`)
                 for (let idx = 0; idx < templateStructure.carouselCards.length; idx++) {
@@ -221,13 +247,14 @@ serve(async (req: Request) => {
             // ─────────────────────────────────────────────────────────────────────────────
 
             for (const contact of contacts) {
-                const phone = contact.phone || contact.mobile || contact.whatsapp
+                const rawPhone = contact.phone || contact.mobile || contact.whatsapp
+                const phone = String(rawPhone).replace(/\D/g, '') // Remove all non-numeric characters for Meta
                 console.log(`\n👤 Processing contact:`, contact.name, phone)
 
-                if (!phone) {
+                if (!phone || phone.length < 5) {
                     failureCount++
-                    errors.push(`No phone number for contact: ${contact.name || 'Unknown'}`)
-                    console.log(`❌ No phone number`)
+                    errors.push(`Invalid phone number for contact: ${contact.name || 'Unknown'} (${rawPhone})`)
+                    console.error(`❌ Invalid phone number: ${rawPhone}`)
                     continue
                 }
 
@@ -249,14 +276,14 @@ serve(async (req: Request) => {
                 if (templateStructure) {
                     const components: any[] = []
 
-                    // Add header if exists - use uploaded media ID from campaign
-                    if (templateStructure.hasHeader && campaign.header_media_id) {
+                    // Add header if exists - use uploaded media ID from campaign or template default
+                    if (templateStructure.hasHeader && resolvedStandardHeaderId) {
                         components.push({
                             type: "header",
                             parameters: [{
                                 type: templateStructure.headerType,
                                 [templateStructure.headerType]: {
-                                    id: campaign.header_media_id
+                                    id: resolvedStandardHeaderId
                                 }
                             }]
                         })
@@ -265,14 +292,15 @@ serve(async (req: Request) => {
                     // Add body parameters if exist
                     if (templateStructure.bodyParameters && templateStructure.bodyParameters.length > 0) {
                         const bodyParams = templateStructure.bodyParameters.map((param: any) => {
-                            const paramObj: any = {
+                            const p: any = {
                                 type: "text",
                                 text: contact.name || "Customer"
                             }
-                            if (param.name) {
-                                paramObj.parameter_name = param.name
+                            // Meta requires parameter_name ONLY for named parameters (non-numeric)
+                            if (param.name && isNaN(Number(param.name))) {
+                                p.parameter_name = param.name
                             }
-                            return paramObj
+                            return p
                         })
                         components.push({
                             type: "body",
@@ -330,12 +358,13 @@ serve(async (req: Request) => {
                     )
 
                     if (response.ok) {
+                        const metaData = await response.json()
                         successCount++
-                        console.log(`✅ Message sent successfully!`)
+                        console.log(`✅ Message sent successfully! Msg ID: ${metaData.messages?.[0]?.id}`)
                     } else {
                         const error = await response.json()
                         failureCount++
-                        console.log(`❌ WhatsApp API error:`, JSON.stringify(error, null, 2))
+                        console.error(`❌ WhatsApp API error for ${phone}:`, JSON.stringify(error, null, 2))
                         errors.push(`Failed to send to ${phone}: ${JSON.stringify(error)}`)
                     }
                 } catch (error) {
@@ -349,10 +378,15 @@ serve(async (req: Request) => {
             } // End of contact loop
 
             console.log(`\n📊 Final Results: ${successCount} sent, ${failureCount} failed`)
-            if (errors.length > 0) console.log(`Errors:`, errors)
+            if (errors.length > 0) console.log(`Recent Errors:`, errors.slice(0, 5))
 
             // Update campaign status
-            const finalStatus = failureCount > 0 && successCount === 0 ? 'Failed' : failureCount > 0 ? 'Completed' : 'Completed'
+            let finalStatus = 'Completed'
+            if (successCount === 0 && failureCount > 0) {
+                finalStatus = 'Failed'
+            } else if (successCount > 0 && failureCount > 0) {
+                finalStatus = 'Completed' // Partial success
+            }
             console.log(`\n📝 Updating campaign status to: ${finalStatus}`)
             const { error: updateError } = await supabaseClient
                 .from('Campaigns')

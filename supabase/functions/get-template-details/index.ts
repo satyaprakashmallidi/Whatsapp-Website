@@ -103,6 +103,8 @@ serve(async (req: Request) => {
         const components = template.components || []
 
         const structure: any = {
+            name: template.name,
+            language: template.language,
             hasHeader: false,
             headerType: null,
             headerHandleId: null,
@@ -161,17 +163,33 @@ serve(async (req: Request) => {
         console.log('🔍 Body component:', JSON.stringify(bodyComponent, null, 2))
 
         if (bodyComponent && bodyComponent.text) {
-            console.log('📝 Body text:', bodyComponent.text)
-            // Match both numbered {{1}} and named {{name}} parameters
-            const paramMatches = bodyComponent.text.match(/\{\{[^}]+\}\}/g) || []
-            console.log('🎯 Param matches:', paramMatches)
+            const bodyText = bodyComponent.text
+            console.log('📝 Body text:', bodyText)
+
+            // Step 1: Try strictly numbered parameters (Standard Meta normalization)
+            // Matches {{1}}, {{ 1 }}, {{2}}, etc.
+            let paramMatches = bodyText.match(/\{\{\s*\d+\s*\}\}/g) || []
+
+            // Step 2: Fallback to more inclusive alphanumeric regex if no numbered ones found
+            // Catch templates that might use named markers like {{name}}
+            if (paramMatches.length === 0) {
+                const broadMatches = bodyText.match(/\{\{\s*[a-zA-Z0-9_]+\s*\}\}/g) || []
+                // Filter out obviously non-variable text (simple heuristic: length < 40)
+                paramMatches = broadMatches.filter((m: string) => m.length < 40)
+            }
+
+            console.log('🎯 Final Param matches found:', paramMatches)
 
             structure.bodyParameters = paramMatches.map((match: string, idx: number) => {
-                // Extract the content between {{ and }}
-                const content = match.replace(/\{\{|\}\}/g, '')
-                // Try to parse as number, otherwise use index + 1
-                const index = isNaN(parseInt(content)) ? idx + 1 : parseInt(content)
-                return { index, placeholder: match, name: content }
+                // Extract unique digits/name: remove braces and spaces
+                const content = match.replace(/\{\{|\}\}|\s/g, '')
+                const isNumeric = /^\d+$/.test(content)
+                const index = isNumeric ? parseInt(content) : idx + 1
+                return {
+                    index,
+                    placeholder: match,
+                    name: content
+                }
             })
         }
 

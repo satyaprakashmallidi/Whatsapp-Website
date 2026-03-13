@@ -199,7 +199,9 @@ Sarah Johnson,\t+14155551235,sarah.johnson@example.com`
         {/* Header */}
         <div className="mb-6 lg:mb-8 flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0">
           <div className="flex-1 min-w-0">
-            <h1 className="text-2xl lg:text-4xl font-extrabold text-gray-900 tracking-tight mb-2">Contacts</h1>
+            <h1 className="text-2xl lg:text-4xl font-extrabold text-gray-900 tracking-tight mb-2">
+              Contacts <span className="text-gray-400 font-medium ml-1">({contacts.length})</span>
+            </h1>
             <p className="text-sm lg:text-lg text-gray-600 font-medium">Manage your audience and subscriber lists</p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3">

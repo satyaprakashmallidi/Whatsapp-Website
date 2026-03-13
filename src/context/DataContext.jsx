@@ -21,6 +21,7 @@ export const DataProvider = ({ children }) => {
   const [campaigns, setCampaigns] = useState([])
   const [reports, setReports] = useState([])
   const [userRecord, setUserRecord] = useState(null)
+  const [followupRules, setFollowupRules] = useState([])
 
   // Fetch user data from Supabase
   const fetchUserData = async () => {
@@ -162,6 +163,7 @@ export const DataProvider = ({ children }) => {
   // Load data when user changes
   useEffect(() => {
     fetchUserData()
+    fetchFollowupRules()
   }, [user])
 
   // Contact functions
@@ -185,20 +187,35 @@ export const DataProvider = ({ children }) => {
   // Bulk add contacts (for CSV import)
   const addContacts = async (contactsArray) => {
     const now = Date.now()
-    const newContacts = contactsArray.map((contact, index) => ({
-      ...contact,
-      id: now + index, // Ensure unique IDs
-      createdAt: new Date().toISOString().split('T')[0]
-    }))
-    const updatedContacts = [...contacts, ...newContacts]
-    setContacts(updatedContacts)
+    const existingPhones = new Set(contacts.map(c => c.phone))
 
-    await updateUserData({
-      contacts: updatedContacts,
-      total_contacts: updatedContacts.length
-    })
+    // Filter out duplicates by phone number to determine what's actually new
+    const uniqueNewContacts = contactsArray.filter(c => !existingPhones.has(c.phone))
 
-    return newContacts
+    let allUpdatedContacts = contacts
+    let addedContacts = []
+
+    if (uniqueNewContacts.length > 0) {
+      addedContacts = uniqueNewContacts.map((contact, index) => ({
+        ...contact,
+        id: now + index,
+        createdAt: new Date().toISOString().split('T')[0]
+      }))
+
+      allUpdatedContacts = [...contacts, ...addedContacts]
+      setContacts(allUpdatedContacts)
+
+      await updateUserData({
+        contacts: allUpdatedContacts,
+        total_contacts: allUpdatedContacts.length
+      })
+    }
+
+    // Create a set of phone numbers from the input array for efficient lookup
+    const inputPhones = new Set(contactsArray.map(c => c.phone));
+
+    // Return ALL contacts that were part of this import (existing + newly added)
+    return allUpdatedContacts.filter(c => inputPhones.has(c.phone))
   }
 
   const updateContact = async (id, updates) => {
@@ -631,6 +648,170 @@ export const DataProvider = ({ children }) => {
     messagesSent: campaigns.reduce((sum, c) => sum + (c.delivered || 0), 0),
   }
 
+  // ── Follow-up Rule Functions ──
+
+  const fetchFollowupRules = async () => {
+    if (!user?.email) return
+    const { data, error } = await supabase
+      .from('template_followups')
+      .select('*')
+      .eq('user_email', user.email)
+    if (!error) {
+      // Expand carousel rows (JSONB) into flat rule objects so UI filtering works the same
+      const expanded = []
+      for (const row of (data || [])) {
+        if (row.template_type === 'carousel' && Array.isArray(row.rules)) {
+          row.rules.forEach(r => expanded.push({
+            id: row.id,
+            source_template_name: row.source_template_name,
+            template_type: 'carousel',
+            ...r
+          }))
+        } else {
+          expanded.push(row)
+        }
+      }
+      setFollowupRules(expanded)
+    }
+  }
+
+  const saveFollowupRule = async (ruleOrRules) => {
+    const rules = Array.isArray(ruleOrRules) ? ruleOrRules : [ruleOrRules]
+    if (rules.length === 0) return { error: null }
+
+    const sourceTemplateName = rules[0].source_template_name
+    const isCarousel = rules.some(r => r.card_index !== null && r.card_index !== undefined)
+
+    if (isCarousel) {
+      // ── Carousel: one row per template, all button rules stored as JSONB array ──
+
+      // Cleanup legacy rows from older versions to prevent UI duplicates
+      await supabase
+        .from('template_followups')
+        .delete()
+        .eq('user_email', user.email)
+        .eq('source_template_name', sourceTemplateName)
+        .eq('template_type', 'standard')
+
+      const { data: existingRow } = await supabase
+        .from('template_followups')
+        .select('id, rules')
+        .eq('user_email', user.email)
+        .eq('source_template_name', sourceTemplateName)
+        .eq('template_type', 'carousel')
+        .maybeSingle()
+
+      const existing = existingRow && Array.isArray(existingRow.rules) ? existingRow.rules : []
+      let updatedRules = [...existing]
+
+      // Apply each new rule (add/update if selected, remove if cleared)
+      for (const rule of rules) {
+        const idx = updatedRules.findIndex(r => r.button_payload === rule.button_payload)
+
+        if (rule.followup_template_name) {
+          const ruleEntry = {
+            button_payload: rule.button_payload,
+            button_title: rule.button_title,
+            card_index: rule.card_index,
+            followup_template_name: rule.followup_template_name,
+            followup_template_language: rule.followup_template_language
+          }
+          if (idx >= 0) updatedRules[idx] = ruleEntry
+          else updatedRules.push(ruleEntry)
+        } else {
+          // Rule was cleared
+          if (idx >= 0) updatedRules.splice(idx, 1)
+        }
+      }
+
+      if (existingRow) {
+        const { error } = await supabase
+          .from('template_followups')
+          .update({ rules: updatedRules })
+          .eq('id', existingRow.id)
+        if (error) console.error('Supabase update error:', error)
+      } else {
+        if (updatedRules.length > 0) {
+          await supabase
+            .from('template_followups')
+            .insert({
+              user_email: user.email,
+              source_template_name: sourceTemplateName,
+              template_type: 'carousel',
+              rules: updatedRules
+            })
+        }
+      }
+    } else {
+      // ── Standard: one row per button ──
+      for (const rule of rules) {
+        if (!rule.followup_template_name) {
+          // Delete rule if it was cleared
+          await supabase
+            .from('template_followups')
+            .delete()
+            .eq('user_email', user.email)
+            .eq('source_template_name', rule.source_template_name)
+            .eq('button_payload', rule.button_payload)
+            .is('card_index', null)
+          continue
+        }
+
+        const { data: existingRows } = await supabase
+          .from('template_followups')
+          .select('id')
+          .eq('user_email', user.email)
+          .eq('source_template_name', rule.source_template_name)
+          .eq('button_payload', rule.button_payload)
+          .is('card_index', null)
+
+        if (existingRows && existingRows.length > 0) {
+          const mainId = existingRows[0].id
+          await supabase
+            .from('template_followups')
+            .update({
+              followup_template_name: rule.followup_template_name,
+              followup_template_language: rule.followup_template_language,
+              button_title: rule.button_title
+            })
+            .eq('id', mainId)
+
+          if (existingRows.length > 1) {
+            const duplicateIds = existingRows.slice(1).map(r => r.id)
+            await supabase.from('template_followups').delete().in('id', duplicateIds)
+          }
+        } else {
+          await supabase
+            .from('template_followups')
+            .insert({
+              user_email: user.email,
+              source_template_name: rule.source_template_name,
+              template_type: 'standard',
+              button_payload: rule.button_payload,
+              button_title: rule.button_title,
+              card_index: null,
+              followup_template_name: rule.followup_template_name,
+              followup_template_language: rule.followup_template_language
+            })
+        }
+      }
+    }
+
+    // Refresh state
+    await fetchFollowupRules()
+    return { error: null }
+  }
+
+  const deleteFollowupRule = async (id) => {
+    const { error } = await supabase
+      .from('template_followups')
+      .delete()
+      .eq('id', id)
+      .eq('user_email', user.email)
+    if (!error) setFollowupRules(prev => prev.filter(r => r.id !== id))
+    return { error }
+  }
+
   // Get audience by ID (handles string/number type mismatch)
   const getAudienceById = (id) => audiences.find(a => String(a.id) === String(id))
 
@@ -669,6 +850,11 @@ export const DataProvider = ({ children }) => {
     getAudienceContacts,
     fetchWhatsAppTemplateDetails,
     parseTemplateComponents,
+    // Follow-up rules
+    followupRules,
+    fetchFollowupRules,
+    saveFollowupRule,
+    deleteFollowupRule,
   }
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

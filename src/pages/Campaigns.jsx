@@ -652,11 +652,11 @@ const Campaigns = () => {
                             value: b.url || b.phone_number || b.text
                           })) || [],
                           // For carousel templates
-                          mainBody: templateStructure.components?.find(c => c.type === 'CAROUSEL')?.cards?.[0]?.components?.find(c => c.type === 'BODY')?.text ? templateStructure.components?.find(c => c.type === 'BODY')?.text : '', // Meta returns carousel body differently sometimes, fallback to main body component
+                          mainBody: templateStructure.components?.find(c => c.type === 'BODY')?.text || '',
                           cards: templateStructure.carouselCards?.map((card) => ({
                             headerMediaId: card.headerMediaId || card.headerImageUrl,
-                            bodyText: card.bodyText || card.components?.find(c => c.type === 'BODY')?.text || '',
-                            buttons: card.components?.find(c => c.type === 'BUTTONS')?.buttons?.map(b => ({
+                            bodyText: card.bodyText || '',
+                            buttons: card.buttons?.map(b => ({
                               type: b.type,
                               text: b.text,
                             })) || []

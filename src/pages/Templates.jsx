@@ -10,7 +10,7 @@ import { generateStandardTemplate, generateCarouselTemplate } from '../services/
 import { useSearchParams } from 'react-router-dom'
 
 const Templates = () => {
-  const { templates, addTemplate, deleteTemplate, fetchWhatsAppTemplateDetails } = useData()
+  const { templates, addTemplate, deleteTemplate, fetchWhatsAppTemplateDetails, saveFollowupRule, fetchFollowupRules, followupRules } = useData()
   const { showAlert, AlertComponent } = useAlert()
   const [searchParams, setSearchParams] = useSearchParams()
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -61,6 +61,12 @@ const Templates = () => {
   const [selectedTemplateForDetails, setSelectedTemplateForDetails] = useState(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
 
+  // ── Auto-Reply Modal State ──
+  const [autoReplyModal, setAutoReplyModal] = useState(null)
+  // autoReplyModal = { templateName, buttons: [{ cardIndex, buttonTitle, buttonPayload }], rules: {} }
+  // rules: { [buttonPayload]: { followup_template_name, followup_template_language } }
+  const [savingAutoReply, setSavingAutoReply] = useState(false)
+
   // ── AI Generator State ──
   const [showStandardAI, setShowStandardAI] = useState(false)
   const [showCarouselAI, setShowCarouselAI] = useState(false)
@@ -77,8 +83,8 @@ const Templates = () => {
     headerType: 'TEXT', // 'TEXT' | 'IMAGE'
     headerImageFile: null,
     includeFooter: false,
-    buttonTypes: ['QUICK_REPLY'], // min 1, max 2
-    buttonValues: ['', ''],      // value per selected button (text / url / phone)
+    buttonTypes: ['QUICK_REPLY'], // min 1, max 3 for QR, max 2 for CTA
+    buttonValues: ['', '', ''],      // increased to 3 slots
   })
 
   // Carousel AI form
@@ -751,6 +757,77 @@ const Templates = () => {
     }
   }
 
+  // Helper to open Auto-Reply modal for an existing template
+  const handleEditAutoReplies = (template) => {
+    const templateName = template.template_name || template.name
+    const quickReplyButtons = []
+
+    if (template.type === 'carousel' && template.cards) {
+      template.cards.forEach((card, cardIdx) => {
+        (card.buttons || []).forEach(btn => {
+          // Check for 'QUICK_REPLY' type (Meta sometimes returns 'QUICK_REPLY', our generator returns 'quick_reply')
+          if ((btn.type || '').toUpperCase() === 'QUICK_REPLY' && btn.text) {
+            // Note: Meta returns payload in 'value', our generator value/text. Use whichever is available.
+            const payloadBase = btn.value || btn.text
+            const compoundPayload = `${templateName}__${payloadBase.replace(/\s+/g, '_').toLowerCase()}`
+            quickReplyButtons.push({
+              cardIndex: cardIdx,
+              buttonTitle: btn.text,
+              buttonPayload: compoundPayload,
+            })
+          }
+        })
+      })
+    } else if (template.hasButtons && template.buttons) {
+      template.buttons.forEach(btn => {
+        if ((btn.type || '').toUpperCase() === 'QUICK_REPLY' && btn.text) {
+          const payloadBase = btn.quick_reply_payload || btn.value || btn.text
+          const compoundPayload = `${templateName}__${payloadBase.replace(/\s+/g, '_').toLowerCase()}`
+          quickReplyButtons.push({
+            cardIndex: null,
+            buttonTitle: btn.text,
+            buttonPayload: compoundPayload,
+          })
+        }
+      })
+    }
+
+    if (quickReplyButtons.length === 0) {
+      showAlert({
+        title: 'No Quick Replies',
+        message: 'This template does not have any Quick Reply buttons to configure.',
+        type: 'warning'
+      })
+      return
+    }
+
+    // Pre-fill existing rules
+    const existingRules = {}
+    quickReplyButtons.forEach(btn => {
+      const rule = followupRules.find(r =>
+        r.button_payload === btn.buttonPayload &&
+        r.source_template_name === templateName &&
+        r.card_index === btn.cardIndex
+      )
+      if (rule) {
+        // ...
+        // We also need to key the UI state by both payload and cardIndex if cardIndex exists
+        const uiKey = btn.cardIndex !== null ? `${btn.buttonPayload}__c${btn.cardIndex}` : btn.buttonPayload;
+        existingRules[uiKey] = {
+          followup_template_name: rule.followup_template_name,
+          followup_template_language: rule.followup_template_language
+        }
+      }
+    })
+
+    setAutoReplyModal({
+      templateName,
+      buttons: quickReplyButtons,
+      rules: existingRules
+    })
+    setShowDetailsModal(false)
+  }
+
   // Handle updating template statuses from Meta
   const handleUpdateStatuses = async () => {
     setUpdatingStatuses(true)
@@ -1010,6 +1087,25 @@ const Templates = () => {
           type: 'success'
         })
 
+        // Collect all quick_reply buttons from all cards for auto-reply setup
+        const quickReplyButtons = []
+        carouselTemplate.cards.forEach((card, cardIdx) => {
+          (card.buttons || []).forEach(btn => {
+            if ((btn.type || '').toLowerCase() === 'quick_reply' && btn.text) {
+              const compoundPayload = `${sanitizedName}__${(btn.value || btn.text).replace(/\s+/g, '_').toLowerCase()}`
+              quickReplyButtons.push({
+                cardIndex: cardIdx,
+                buttonTitle: btn.text,
+                buttonPayload: compoundPayload,
+              })
+            }
+          })
+        })
+
+        if (quickReplyButtons.length > 0) {
+          setAutoReplyModal({ templateName: sanitizedName, buttons: quickReplyButtons, rules: {} })
+        }
+
         setShowCreateForm(false)
         // Reset form
         setCarouselTemplate({
@@ -1241,7 +1337,27 @@ const Templates = () => {
         message: 'Your template is pending Meta approval.',
         type: 'success'
       })
-      setTimeout(() => window.location.reload(), 1500)
+
+      // Collect quick_reply buttons for auto-reply setup
+      const quickReplyButtons = []
+      if (newTemplate.hasButtons) {
+        newTemplate.buttons.forEach(btn => {
+          if (btn.type === 'QUICK_REPLY' && btn.text) {
+            const compoundPayload = `${sanitizedName}__${(btn.quick_reply_payload || btn.text).replace(/\s+/g, '_').toLowerCase()}`
+            quickReplyButtons.push({
+              cardIndex: null,
+              buttonTitle: btn.text,
+              buttonPayload: compoundPayload,
+            })
+          }
+        })
+      }
+
+      if (quickReplyButtons.length > 0) {
+        setAutoReplyModal({ templateName: sanitizedName, buttons: quickReplyButtons, rules: {} })
+      } else {
+        setTimeout(() => window.location.reload(), 1500)
+      }
 
     } catch (error) {
       console.error('Template creation error:', error)
@@ -1605,36 +1721,46 @@ const Templates = () => {
                               </div>
                             </div>
 
-                            {/* Buttons — Pill Multi-Select */}
                             <div>
-                              <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">Button Types (Max 2) *</label>
-                              <div className="flex gap-2">
+                              <label className="block text-xs font-semibold text-purple-700 mb-2 uppercase tracking-wide">
+                                Button Types (Max 2 Buttons) *
+                              </label>
+                              <div className="flex flex-wrap gap-2">
                                 {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(bType => {
                                   const isSelected = stdAiForm.buttonTypes.includes(bType);
-                                  const isDisabled = !isSelected && stdAiForm.buttonTypes.length >= 2;
+
                                   return (
                                     <button
                                       key={bType}
                                       type="button"
-                                      disabled={isDisabled}
                                       onClick={() => {
                                         setStdAiForm(p => {
                                           if (isSelected) {
                                             if (p.buttonTypes.length <= 1) return p;
                                             return { ...p, buttonTypes: p.buttonTypes.filter(t => t !== bType) };
                                           } else {
+                                            // Silent Category switching (Meta standard compliance)
+                                            if (bType === 'QUICK_REPLY') {
+                                              if (p.buttonTypes.some(t => t === 'URL' || t === 'PHONE_NUMBER')) {
+                                                return { ...p, buttonTypes: ['QUICK_REPLY'], buttonValues: ['', '', ''] };
+                                              }
+                                            } else {
+                                              if (p.buttonTypes.includes('QUICK_REPLY')) {
+                                                return { ...p, buttonTypes: [bType], buttonValues: ['', '', ''] };
+                                              }
+                                            }
+                                            // Hard limit: 2 buttons total
+                                            if (p.buttonTypes.length >= 2) return p;
                                             return { ...p, buttonTypes: [...p.buttonTypes, bType] };
                                           }
                                         });
                                       }}
                                       className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${isSelected
-                                        ? 'bg-purple-600 text-white border-purple-600 shadow-md scale-105'
-                                        : isDisabled
-                                          ? 'hidden'
-                                          : 'bg-white text-purple-600 border-purple-200 hover:border-purple-400 hover:bg-purple-50'
+                                        ? bType === 'QUICK_REPLY' ? 'bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                        : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:bg-purple-50'
                                         }`}
                                     >
-                                      {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'URL' : 'Phone'}
+                                      {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'Website URL' : 'Phone Number'}
                                     </button>
                                   );
                                 })}
@@ -2384,36 +2510,35 @@ const Templates = () => {
                                 </select>
                               </div>
                               <div className="md:col-span-2">
-                                <label className="block text-xs font-semibold text-purple-700 mb-1 uppercase tracking-wide">
-                                  Button Types (Max 2) *
+                                <label className="block text-xs font-semibold text-purple-700 mb-2 uppercase tracking-wide">
+                                  Button Types (Max 2 Buttons) *
                                 </label>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-2">
                                   {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(bType => {
                                     const isSelected = carAiForm.buttonTypes.includes(bType);
-                                    const isDisabled = !isSelected && carAiForm.buttonTypes.length >= 2;
+
                                     return (
                                       <button
                                         key={bType}
                                         type="button"
-                                        disabled={isDisabled}
                                         onClick={() => {
                                           setCarAiForm(p => {
                                             if (isSelected) {
-                                              if (p.buttonTypes.length <= 1) return p; // prevent removing last button
+                                              if (p.buttonTypes.length <= 1) return p;
                                               return { ...p, buttonTypes: p.buttonTypes.filter(t => t !== bType) };
                                             } else {
+                                              // Permissive mixing but hard limit of 2 total
+                                              if (p.buttonTypes.length >= 2) return p;
                                               return { ...p, buttonTypes: [...p.buttonTypes, bType] };
                                             }
                                           });
                                         }}
                                         className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${isSelected
-                                          ? 'bg-purple-600 text-white border-purple-600 shadow-md transform scale-105'
-                                          : isDisabled
-                                            ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed hidden md:block'
-                                            : 'bg-white text-purple-600 border-purple-200 hover:border-purple-400 hover:bg-purple-50'
+                                          ? bType === 'QUICK_REPLY' ? 'bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                                          : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:bg-purple-50'
                                           }`}
                                       >
-                                        {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'URL' : 'Phone'}
+                                        {bType === 'QUICK_REPLY' ? 'Quick Reply' : bType === 'URL' ? 'Website URL' : 'Phone Number'}
                                       </button>
                                     );
                                   })}
@@ -3083,6 +3208,56 @@ const Templates = () => {
                     </div>
                   )}
 
+                  {/* Auto-Replies Section */}
+                  {!loadingDetails && (
+                    <div className="pt-4 border-t border-gray-100">
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Auto-Replies</p>
+                        {(selectedTemplateForDetails.buttons?.some(b => (b.type || '').toUpperCase() === 'QUICK_REPLY') ||
+                          selectedTemplateForDetails.cards?.some(c => c.buttons?.some(b => (b.type || '').toUpperCase() === 'QUICK_REPLY'))) && (
+                            <button
+                              onClick={() => handleEditAutoReplies(selectedTemplateForDetails)}
+                              className="text-xs font-bold text-green-600 hover:text-green-700 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                              Configure Rules
+                            </button>
+                          )}
+                      </div>
+
+                      {followupRules.filter(r => r.source_template_name === (selectedTemplateForDetails.template_name || selectedTemplateForDetails.name)).length > 0 ? (
+                        <div className="space-y-2">
+                          {followupRules
+                            .filter(r => r.source_template_name === (selectedTemplateForDetails.template_name || selectedTemplateForDetails.name))
+                            .map((rule, idx) => (
+                              <div key={idx} className="flex items-start justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    {rule.card_index !== null && (
+                                      <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">C{rule.card_index + 1}</span>
+                                    )}
+                                    <span className="text-sm font-semibold text-gray-800">"{rule.button_title}"</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                                    <svg className="w-3.5 h-3.5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                                    </svg>
+                                    Sends: <span className="font-medium text-gray-700">{rule.followup_template_name}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-center">
+                          <p className="text-sm text-gray-500">No auto-replies configured for this template.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Action */}
                   <div className="pt-4 border-t border-gray-100">
                     <button
@@ -3097,8 +3272,129 @@ const Templates = () => {
             </div>
           </div>
         )}
+
+        {/* ── Auto-Reply Setup Modal ── */}
+        {autoReplyModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col">
+              {/* Header */}
+              <div className="p-6 border-b border-gray-100">
+                <div className="flex items-center gap-3 mb-1">
+                  <div className="w-9 h-9 rounded-xl bg-green-100 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900">Set Up Auto-Reply?</h2>
+                    <p className="text-xs text-gray-500">Template: <span className="font-mono font-semibold">{autoReplyModal.templateName}</span></p>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-600 mt-3">
+                  When a contact clicks one of these Quick Reply buttons, automatically send them a follow-up template. You can configure each button separately.
+                </p>
+              </div>
+
+              {/* Button Rules */}
+              <div className="p-6 overflow-y-auto space-y-4 flex-1">
+                {autoReplyModal.buttons.map((btn, idx) => {
+                  const uiKey = btn.cardIndex !== null ? `${btn.buttonPayload}__c${btn.cardIndex}` : btn.buttonPayload;
+                  return (
+                    <div key={idx} className="border border-gray-200 rounded-xl p-4 bg-gray-50">
+                      <div className="flex items-center gap-2 mb-3">
+                        {btn.cardIndex !== null && (
+                          <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
+                            Card {btn.cardIndex + 1}
+                          </span>
+                        )}
+                        <span className="text-sm font-semibold text-gray-800">"{btn.buttonTitle}"</span>
+                      </div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">Follow-up template to send:</label>
+                      <select
+                        value={autoReplyModal.rules[uiKey]?.followup_template_name || ''}
+                        onChange={(e) => {
+                          const selected = templates.find(t => (t.template_name || t.name) === e.target.value)
+                          setAutoReplyModal(prev => ({
+                            ...prev,
+                            rules: {
+                              ...prev.rules,
+                              [uiKey]: {
+                                followup_template_name: e.target.value,
+                                followup_template_language: selected?.language || 'en_US'
+                              }
+                            }
+                          }))
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-400 focus:border-transparent bg-white"
+                      >
+                        <option value="">— No auto-reply —</option>
+                        {templates
+                          .filter(t => (t.template_name || t.name) !== autoReplyModal.templateName)
+                          .map(t => (
+                            <option key={t.id} value={t.template_name || t.name}>
+                              {t.template_name || t.name} ({t.language || 'en_US'})
+                            </option>
+                          ))
+                        }
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer */}
+              <div className="p-6 border-t border-gray-100 flex gap-3">
+                <button
+                  onClick={async () => {
+                    setSavingAutoReply(true)
+                    try {
+                      // Gather all rules, including empty ones, so we can delete unselected rules
+                      const rulesToSave = autoReplyModal.buttons
+                        .map(btn => {
+                          const uiKey = btn.cardIndex !== null ? `${btn.buttonPayload}__c${btn.cardIndex}` : btn.buttonPayload;
+                          const ruleData = autoReplyModal.rules[uiKey] || {}
+                          return {
+                            source_template_name: autoReplyModal.templateName,
+                            button_payload: btn.buttonPayload,
+                            button_title: btn.buttonTitle,
+                            card_index: btn.cardIndex,
+                            followup_template_name: ruleData.followup_template_name || null,
+                            followup_template_language: ruleData.followup_template_language || 'en_US',
+                          }
+                        })
+
+                      if (rulesToSave.length > 0) {
+                        // Pass the entire array to save them together
+                        await saveFollowupRule(rulesToSave)
+                      }
+
+                      setAutoReplyModal(null)
+                    } catch (err) {
+                      console.error('Failed to save auto-reply rules:', err)
+                    } finally {
+                      setSavingAutoReply(false)
+                    }
+                  }}
+                  disabled={savingAutoReply}
+                  className="flex-1 py-2.5 bg-green-500 text-white font-semibold rounded-xl hover:bg-green-600 transition-colors disabled:opacity-50 text-sm"
+                >
+                  {savingAutoReply ? 'Saving…' : 'Save Auto-Replies'}
+                </button>
+                <button
+                  onClick={() => {
+                    setAutoReplyModal(null)
+                    setTimeout(() => window.location.reload(), 500)
+                  }}
+                  className="flex-1 py-2.5 border border-gray-300 text-gray-700 font-semibold rounded-xl hover:bg-gray-50 transition-colors text-sm"
+                >
+                  Skip for Now
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </PageLoader>
+    </PageLoader >
   )
 }
 

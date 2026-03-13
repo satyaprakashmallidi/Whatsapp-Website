@@ -1,18 +1,29 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useData } from '../context/DataContext'
 import PageLoader from '../components/PageLoader'
 
 const Audiences = () => {
-  const { audiences, contacts, addAudience, updateAudience, deleteAudience } = useData()
+  const { audiences, contacts, addAudience, addContacts, updateAudience, deleteAudience } = useData()
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newAudience, setNewAudience] = useState({ name: '', description: '', members: [] })
   const [openMenuId, setOpenMenuId] = useState(null)
   const [editingAudience, setEditingAudience] = useState(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState('')
+  const [importSuccess, setImportSuccess] = useState('')
+  const fileInputRef = useRef(null)
+
+  const filteredContacts = contacts.filter(contact =>
+    contact.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    contact.phone.includes(searchTerm)
+  )
 
   const handleCreateAudience = (e) => {
     e.preventDefault()
     addAudience(newAudience)
     setNewAudience({ name: '', description: '', members: [] })
+    setSearchTerm('')
     setShowCreateForm(false)
   }
 
@@ -45,6 +56,7 @@ const Audiences = () => {
     e.preventDefault()
     updateAudience(editingAudience.id, editingAudience)
     setEditingAudience(null)
+    setSearchTerm('')
   }
 
   const toggleContactSelectionForEdit = (contactId) => {
@@ -59,6 +71,95 @@ const Audiences = () => {
     })
   }
 
+  const downloadExampleCSV = () => {
+    const csvContent = `Name,Phone,Email\nRajesh Kumar,\t+919876543210,rajesh.kumar@example.com\nPriya Sharma,\t+919876543211,priya.sharma@example.com`
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', 'audience_example.csv')
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const fileName = file.name.toLowerCase()
+    const isValidFile = fileName.endsWith('.csv') || fileName.endsWith('.txt') || file.type.includes('text')
+
+    if (!isValidFile) {
+      setImportError('Please upload a CSV or TXT file')
+      return
+    }
+
+    setImporting(true)
+    setImportError('')
+    setImportSuccess('')
+
+    const reader = new FileReader()
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result
+        const lines = text.split(/\r?\n|\r/).filter(line => line.trim())
+        const dataLines = lines.slice(1) // Skip header
+
+        const contactsToAdd = []
+        for (const line of dataLines) {
+          const values = []
+          let current = '', inQuotes = false
+          for (let i = 0; i < line.length; i++) {
+            const char = line[i]
+            if (char === '"') inQuotes = !inQuotes
+            else if (char === ',' && !inQuotes) { values.push(current); current = '' }
+            else current += char
+          }
+          values.push(current)
+          const cleanValues = values.map(v => v.replace(/^["'\t\r]+|["'\t\r]+$/g, '').replace(/\t/g, '').trim())
+          if (cleanValues.length >= 2 && cleanValues[0] && cleanValues[1]) {
+            contactsToAdd.push({ name: cleanValues[0], phone: cleanValues[1], email: cleanValues[2] || '' })
+          }
+        }
+
+        if (contactsToAdd.length > 0) {
+          const addedContacts = await addContacts(contactsToAdd)
+          const newContactIds = addedContacts.map(c => c.id)
+
+          if (editingAudience) {
+            setEditingAudience(prev => ({
+              ...prev,
+              members: [...new Set([...(prev.members || []), ...newContactIds])]
+            }))
+          } else if (showCreateForm) {
+            setNewAudience(prev => ({
+              ...prev,
+              members: [...new Set([...prev.members, ...newContactIds])]
+            }))
+          }
+
+          setImportSuccess(`Successfully imported ${addedContacts.length} contacts`)
+        } else {
+          setImportError('No valid contacts found in the file')
+        }
+      } catch (error) {
+        console.error('Import error:', error)
+        setImportError('Error parsing file')
+      } finally {
+        setImporting(false)
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        setTimeout(() => setImportSuccess(''), 5000)
+      }
+    }
+    reader.readAsText(file)
+  }
+
   return (
     <PageLoader delay={350}>
       <div className="p-4 lg:p-8 pb-24 lg:pb-8">
@@ -68,13 +169,24 @@ const Audiences = () => {
             <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 mb-2">Audiences</h1>
             <p className="text-sm lg:text-base text-gray-600">Create segments to target specific groups of contacts</p>
           </div>
-          <button
-            onClick={() => setShowCreateForm(true)}
-            className="w-full lg:w-auto px-6 py-2 bg-[#FFC107] text-gray-900 text-sm lg:text-base font-semibold rounded-lg hover:bg-[#FFB300] transition-colors"
-          >
-            Create Audience
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="w-full lg:w-auto px-6 py-2 bg-[#FFC107] text-gray-900 text-sm lg:text-base font-semibold rounded-lg hover:bg-[#FFB300] transition-colors shadow-sm"
+            >
+              Create Audience
+            </button>
+          </div>
         </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,.txt,text/csv,text/plain"
+          onChange={handleFileUpload}
+          className="hidden"
+        />
+
 
         {/* Audiences Grid */}
         {audiences.length > 0 ? (
@@ -153,7 +265,10 @@ const Audiences = () => {
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Edit Audience</h2>
                   <button
-                    onClick={() => setEditingAudience(null)}
+                    onClick={() => {
+                      setEditingAudience(null)
+                      setSearchTerm('')
+                    }}
                     className="text-gray-400 hover:text-gray-600 p-2"
                   >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -163,6 +278,26 @@ const Audiences = () => {
                 </div>
               </div>
               <form onSubmit={handleUpdateAudience} className="p-4 lg:p-6 overflow-y-auto">
+                {importSuccess && (
+                  <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg mb-4 flex items-center shadow-sm">
+                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium text-xs">{importSuccess}</span>
+                    <button type="button" onClick={() => setImportSuccess('')} className="ml-auto text-green-700 hover:text-green-900 font-bold">×</button>
+                  </div>
+                )}
+
+                {importError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg mb-4 flex items-center shadow-sm">
+                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium text-xs">{importError}</span>
+                    <button type="button" onClick={() => setImportError('')} className="ml-auto text-red-700 hover:text-red-900 font-bold">×</button>
+                  </div>
+                )}
+
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -190,16 +325,68 @@ const Audiences = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Audience List
-                    </label>
-                    <p className="text-xs lg:text-sm text-gray-500 mb-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Audience List
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={downloadExampleCSV}
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-700"
+                        >
+                          Example CSV
+                        </button>
+                        <span className="text-gray-300 text-xs">|</span>
+                        <button
+                          type="button"
+                          onClick={handleImportClick}
+                          disabled={importing}
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          {importing ? 'Importing...' : 'Import CSV'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] lg:text-xs text-gray-500 mb-2">
                       Select contacts ({editingAudience.members?.length || 0} selected)
                     </p>
+                    {editingAudience.members?.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-4 p-2 border border-dashed border-gray-300 rounded-lg bg-white max-h-24 overflow-y-auto">
+                        {contacts.filter(c => editingAudience.members.includes(c.id)).map(contact => (
+                          <div key={contact.id} className="flex items-center bg-blue-50 text-blue-700 px-2 py-1 rounded-full text-xs font-medium border border-blue-100">
+                            <span className="truncate max-w-[100px]">{contact.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => toggleContactSelectionForEdit(contact.id)}
+                              className="ml-1 text-blue-400 hover:text-blue-600 focus:outline-none"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mb-4">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search contacts..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent text-sm"
+                        />
+                        <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                      </div>
+                    </div>
                     <div className="border border-gray-300 rounded-lg p-3 lg:p-4 bg-gray-50 max-h-48 lg:max-h-60 overflow-y-auto">
-                      {contacts.length > 0 ? (
+                      {filteredContacts.length > 0 ? (
                         <div className="space-y-2">
-                          {contacts.map((contact) => (
+                          {filteredContacts.map((contact) => (
                             <label key={contact.id} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer transition-colors">
                               <input
                                 type="checkbox"
@@ -248,7 +435,10 @@ const Audiences = () => {
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl lg:text-2xl font-bold text-gray-900">Create Audience</h2>
                   <button
-                    onClick={() => setShowCreateForm(false)}
+                    onClick={() => {
+                      setShowCreateForm(false)
+                      setSearchTerm('')
+                    }}
                     className="text-gray-400 hover:text-gray-600 p-2"
                   >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -258,6 +448,26 @@ const Audiences = () => {
                 </div>
               </div>
               <form onSubmit={handleCreateAudience} className="p-4 lg:p-6 overflow-y-auto">
+                {importSuccess && (
+                  <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg mb-4 flex items-center shadow-sm">
+                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium text-xs">{importSuccess}</span>
+                    <button type="button" onClick={() => setImportSuccess('')} className="ml-auto text-green-700 hover:text-green-900 font-bold">×</button>
+                  </div>
+                )}
+
+                {importError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded-lg mb-4 flex items-center shadow-sm">
+                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                    <span className="font-medium text-xs">{importError}</span>
+                    <button type="button" onClick={() => setImportError('')} className="ml-auto text-red-700 hover:text-red-900 font-bold">×</button>
+                  </div>
+                )}
+
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -285,16 +495,68 @@ const Audiences = () => {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Audience List
-                    </label>
-                    <p className="text-xs lg:text-sm text-gray-500 mb-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Audience List
+                      </label>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={downloadExampleCSV}
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-700"
+                        >
+                          Example CSV
+                        </button>
+                        <span className="text-gray-300 text-xs">|</span>
+                        <button
+                          type="button"
+                          onClick={handleImportClick}
+                          disabled={importing}
+                          className="text-xs font-semibold text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          {importing ? 'Importing...' : 'Import CSV'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] lg:text-xs text-gray-500 mb-2">
                       Select contacts ({newAudience.members.length} selected)
                     </p>
+                    {newAudience.members.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-4 p-2 border border-dashed border-gray-300 rounded-lg bg-white max-h-24 overflow-y-auto">
+                        {contacts.filter(c => newAudience.members.includes(c.id)).map(contact => (
+                          <div key={contact.id} className="flex items-center bg-blue-50 text-blue-700 px-2 py-1 rounded-full text-xs font-medium border border-blue-100">
+                            <span className="truncate max-w-[100px]">{contact.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => toggleContactSelection(contact.id)}
+                              className="ml-1 text-blue-400 hover:text-blue-600 focus:outline-none"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="mb-4">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Search contacts..."
+                          value={searchTerm}
+                          onChange={(e) => setSearchTerm(e.target.value)}
+                          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:border-transparent text-sm"
+                        />
+                        <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                      </div>
+                    </div>
                     <div className="border border-gray-300 rounded-lg p-3 lg:p-4 bg-gray-50 max-h-48 lg:max-h-60 overflow-y-auto">
-                      {contacts.length > 0 ? (
+                      {filteredContacts.length > 0 ? (
                         <div className="space-y-2">
-                          {contacts.map((contact) => (
+                          {filteredContacts.map((contact) => (
                             <label key={contact.id} className="flex items-center space-x-3 p-2 hover:bg-white rounded cursor-pointer transition-colors">
                               <input
                                 type="checkbox"

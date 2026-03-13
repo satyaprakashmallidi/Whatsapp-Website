@@ -63,33 +63,6 @@ const Reports = () => {
     setCardImages(prev => prev.filter((_, i) => i !== index))
   }
 
-  // ── Button Handlers ──
-  const toggleButtonType = (type) => {
-    setButtonTypes(prev => {
-      // Max 2 buttons supported usually for generic AI carousel, but Meta allows 2 per card
-      if (prev.includes(type)) {
-        if (prev.length === 1) {
-          showAlert({
-            title: 'Minimum buttons',
-            message: 'Carousel templates require at least one button.',
-            type: 'warning'
-          })
-          return prev
-        }
-        return prev.filter(t => t !== type)
-      } else {
-        if (prev.length >= 2) {
-          showAlert({
-            title: 'Max buttons reached',
-            message: 'You can only choose up to 2 button types for AI generation.',
-            type: 'warning'
-          })
-          return prev
-        }
-        return [...prev, type]
-      }
-    })
-  }
 
   // ── AI Generator ──
   const handleGenerateAI = async () => {
@@ -376,24 +349,41 @@ const Reports = () => {
                   </div>
                 </div>
 
-                {/* Button Types */}
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1.5 uppercase tracking-wide">
-                    Card Buttons *
+                  <label className="block text-[10px] font-bold text-gray-400 mb-2 uppercase tracking-wide">
+                    Button Types (Max 2 Buttons) *
                   </label>
                   <div className="flex flex-wrap gap-2">
-                    {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(type => (
-                      <button
-                        key={type}
-                        onClick={() => toggleButtonType(type)}
-                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${buttonTypes.includes(type)
-                          ? 'bg-blue-100 text-blue-800 border-2 border-blue-400'
-                          : 'bg-gray-50 text-gray-500 border-2 border-gray-200 hover:bg-gray-100'
-                          }`}
-                      >
-                        {type.replace('_', ' ')}
-                      </button>
-                    ))}
+                    {['QUICK_REPLY', 'URL', 'PHONE_NUMBER'].map(type => {
+                      const isSelected = type === 'QUICK_REPLY'
+                        ? buttonTypes.includes('QUICK_REPLY')
+                        : buttonTypes.includes(type);
+
+                      return (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            setButtonTypes(prev => {
+                              if (isSelected) {
+                                if (prev.length <= 1) return prev
+                                return prev.filter(t => t !== type)
+                              } else {
+                                // Permissive mixing but hard limit of 2 total
+                                if (prev.length >= 2) return prev
+                                return [...prev, type]
+                              }
+                            })
+                          }}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${isSelected
+                            ? type === 'QUICK_REPLY' ? 'bg-purple-600 text-white border-purple-600 shadow-sm' : 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300 hover:bg-purple-50'
+                            }`}
+                        >
+                          {type === 'QUICK_REPLY' ? 'Quick Reply' : type === 'URL' ? 'Website' : 'Phone'}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
