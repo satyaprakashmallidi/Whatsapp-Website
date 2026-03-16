@@ -14,6 +14,7 @@ import Campaigns from './pages/Campaigns'
 import Templates from './pages/Templates'
 import TestTemplateCreation from './pages/TestTemplateCreation'
 import Reports from './pages/Reports'
+import ExternalWebhooks from './pages/ExternalWebhooks'
 
 function App() {
   return (
@@ -100,6 +101,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Reports />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/external-webhooks"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ExternalWebhooks />
                   </Layout>
                 </ProtectedRoute>
               }

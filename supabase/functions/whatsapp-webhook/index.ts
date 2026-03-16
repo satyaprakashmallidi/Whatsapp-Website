@@ -319,7 +319,7 @@ serve(async (req) => {
 
         const { data: user, error: userError } = await supabase
             .from('User_details')
-            .select('email, webhook_token, secret_token, meta_access_token, meta_phone_number_id, meta_business_account_id, contacts')
+            .select('email, webhook_token, secret_token, meta_access_token, meta_phone_number_id, meta_business_account_id, contacts, external_webhook_url, external_webhook_active')
             .eq('webhook_token', token)
             .single()
 
@@ -349,6 +349,84 @@ serve(async (req) => {
         if (req.method === 'POST') {
             const body = await req.json()
             console.log('📥 Webhook event for user:', user.email, JSON.stringify(body, null, 2))
+
+            // ─── Forward to External Webhook if Active ────────────────────────
+            if (user.external_webhook_active && user.external_webhook_url) {
+                console.log(`🚀 Forwarding payload to external webhook: ${user.external_webhook_url}`)
+
+                // Allow up to 4 seconds for external webhook to respond with an AI reply
+                // (Meta needs acknowledgment within ~10s or it retries)
+                const fetchPromise = fetch(user.external_webhook_url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                }).then(async res => {
+                    if (res.ok) {
+                        try {
+                            const resJson = await res.json()
+                            if (resJson && resJson.reply_message) {
+                                // Extract sender's phone to send the reply back
+                                const phoneFrom = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
+                                if (phoneFrom && user.meta_access_token && user.meta_phone_number_id) {
+                                    console.log(`🤖 Received AI reply from webhook: "${resJson.reply_message}"`)
+
+                                    const metaPayload = {
+                                        messaging_product: 'whatsapp',
+                                        recipient_type: 'individual',
+                                        to: phoneFrom,
+                                        type: 'text',
+                                        text: { body: resJson.reply_message }
+                                    }
+
+                                    const metaRes = await fetch(`https://graph.facebook.com/v20.0/${user.meta_phone_number_id}/messages`, {
+                                        method: 'POST',
+                                        headers: { 'Authorization': `Bearer ${user.meta_access_token}`, 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(metaPayload)
+                                    })
+
+                                    if (metaRes.ok) {
+                                        const metaData = await metaRes.json()
+                                        const wamid = metaData.messages?.[0]?.id || null
+                                        const now = new Date().toISOString()
+
+                                        await Promise.all([
+                                            supabase.from('messages').insert({
+                                                user_email: user.email,
+                                                contact_phone: phoneFrom,
+                                                message: resJson.reply_message,
+                                                direction: 'outbound',
+                                                status: 'sent',
+                                                wamid,
+                                                created_at: now
+                                            }),
+                                            supabase.from('conversations').upsert({
+                                                user_email: user.email,
+                                                contact_phone: phoneFrom,
+                                                last_message: resJson.reply_message,
+                                                last_message_time: now,
+                                                unread_count: 0
+                                            }, { onConflict: 'user_email,contact_phone' })
+                                        ])
+                                        console.log('✅ Sent and logged auto-reply from external webhook')
+                                    } else {
+                                        console.error('❌ Failed to send auto-reply to Meta:', await metaRes.text())
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            // Response wasn't JSON or fetch failed, that's fine
+                        }
+                    }
+                }).catch(err => {
+                    console.error('❌ Failed to forward to external webhook:', err)
+                })
+
+                // Create a 4-second timeout promise
+                const timeoutPromise = new Promise(resolve => setTimeout(resolve, 4000))
+
+                // Wait for either the webhook to finish or 4 seconds to pass
+                await Promise.race([fetchPromise, timeoutPromise])
+            }
 
             const messages = body.entry?.[0]?.changes?.[0]?.value?.messages || []
             const statuses = body.entry?.[0]?.changes?.[0]?.value?.statuses || []
