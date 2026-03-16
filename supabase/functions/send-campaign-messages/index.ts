@@ -176,6 +176,36 @@ serve(async (req: Request) => {
             let failureCount = 0
             const errors: string[] = []
 
+            // Extract base template string for logging to messages table
+            let baseMessageText = `[Template: ${templateName}]`
+            let templateHeader: string | null = null
+            let templateFooter: string | null = null
+            let templateButtons: any[] = []
+
+            if (templateStructure?.components) {
+                const bodyComp = templateStructure.components.find((c: any) => c.type.toUpperCase() === 'BODY')
+                if (bodyComp && bodyComp.text) {
+                    baseMessageText = bodyComp.text
+                }
+                const headerComp = templateStructure.components.find((c: any) => c.type.toUpperCase() === 'HEADER')
+                if (headerComp && headerComp.format === 'TEXT') {
+                    templateHeader = headerComp.text || null
+                }
+                const footerComp = templateStructure.components.find((c: any) => c.type.toUpperCase() === 'FOOTER')
+                if (footerComp) {
+                    templateFooter = footerComp.text || null
+                }
+                const buttonsComp = templateStructure.components.find((c: any) => c.type.toUpperCase() === 'BUTTONS')
+                if (buttonsComp && buttonsComp.buttons) {
+                    templateButtons = buttonsComp.buttons.map((b: any) => ({
+                        type: b.type,
+                        text: b.text,
+                        url: b.url || null,
+                        phone_number: b.phone_number || null
+                    }))
+                }
+            }
+
             // ─── PRE-PROCESS: Upload carousel card images ONCE before looping contacts ───
             // Meta's template API gives us CDN URLs in header_handle, not numeric IDs.
             // We must download and re-upload each to get a proper numeric media handle.
@@ -256,6 +286,12 @@ serve(async (req: Request) => {
                     errors.push(`Invalid phone number for contact: ${contact.name || 'Unknown'} (${rawPhone})`)
                     console.error(`❌ Invalid phone number: ${rawPhone}`)
                     continue
+                }
+
+                // Interpolate variables into baseMessageText for the database
+                let contactMessageText = baseMessageText
+                if (templateStructure?.bodyParameters && templateStructure.bodyParameters.length > 0) {
+                    contactMessageText = contactMessageText.replace(/\{\{.+?\}\}/g, contact.name || "Customer")
                 }
 
                 // Build message payload
@@ -361,6 +397,44 @@ serve(async (req: Request) => {
                         const metaData = await response.json()
                         successCount++
                         console.log(`✅ Message sent successfully! Msg ID: ${metaData.messages?.[0]?.id}`)
+
+                        // Insert into Chat UI Database
+                        const wamid = metaData.messages?.[0]?.id || null
+                        const now = new Date().toISOString()
+
+                        try {
+                            // Run inserts in the background without blocking the loop
+                            const templateDataPayload = {
+                                header: templateHeader,
+                                body: contactMessageText,
+                                footer: templateFooter,
+                                buttons: templateButtons,
+                                template_name: templateName
+                            }
+                            Promise.all([
+                                supabaseClient.from('messages').insert({
+                                    user_email: user.email,
+                                    contact_phone: phone,
+                                    message: contactMessageText,
+                                    message_type: 'template',
+                                    template_data: templateDataPayload,
+                                    direction: 'outbound',
+                                    status: 'sent',
+                                    wamid,
+                                    created_at: now
+                                }),
+                                supabaseClient.from('conversations').upsert({
+                                    user_email: user.email,
+                                    contact_phone: phone,
+                                    last_message: contactMessageText,
+                                    last_message_time: now,
+                                    unread_count: 0
+                                }, { onConflict: 'user_email,contact_phone' })
+                            ]).catch(dbErr => console.error('Error saving campaign msg to DB:', dbErr))
+                        } catch (e) {
+                            console.error('Error initiating DB insert:', e)
+                        }
+
                     } else {
                         const error = await response.json()
                         failureCount++
@@ -407,15 +481,15 @@ serve(async (req: Request) => {
 
         // Use EdgeRuntime.waitUntil if available to keep execution alive after returning
         if (typeof EdgeRuntime !== 'undefined' && typeof EdgeRuntime.waitUntil === 'function') {
-            EdgeRuntime.waitUntil(backgroundSend().catch(err => {
+            EdgeRuntime.waitUntil(backgroundSend().catch((err: any) => {
                 console.error('Background send utterly failed:', err);
             }));
         } else if (typeof (globalThis as any).waitUntil === 'function') {
-            (globalThis as any).waitUntil(backgroundSend().catch(err => {
+            (globalThis as any).waitUntil(backgroundSend().catch((err: any) => {
                 console.error('Background send utterly failed:', err);
             }));
         } else {
-            backgroundSend().catch(err => {
+            backgroundSend().catch((err: any) => {
                 console.error('Background send utterly failed:', err);
             });
         }
@@ -437,3 +511,4 @@ serve(async (req: Request) => {
         )
     }
 })
+

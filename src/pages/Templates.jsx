@@ -101,6 +101,7 @@ const Templates = () => {
   const textareaRef = useRef(null)
   const headerTextareaRef = useRef(null)
   const footerTextareaRef = useRef(null)
+  const loadingTemplateRef = useRef(null)
 
   // Listen for deep-links from Reports page
   useEffect(() => {
@@ -713,12 +714,25 @@ const Templates = () => {
     })
     setShowDetailsModal(true)
 
+    const targetName = template.template_name || template.name
+    const targetLang = template.language || 'en_US'
+    const requestId = `${targetName}-${targetLang}-${Date.now()}`
+
+    // Set the "most recent" request ID
+    loadingTemplateRef.current = requestId
+
+    console.log(`🔍 [UI] Opening details for: "${targetName}" (Lang: ${targetLang})`)
+    console.log(`📦 [UI] Full template object:`, template)
+
     try {
       // Try to fetch full details from Meta
-      const fullTemplate = await fetchWhatsAppTemplateDetails(
-        template.template_name || template.name,
-        template.language || 'en_US'
-      )
+      const fullTemplate = await fetchWhatsAppTemplateDetails(targetName, targetLang)
+
+      // Guard: If a newer request has been started, ignore this result
+      if (loadingTemplateRef.current !== requestId) {
+        console.log(`⚠️ [UI] Ignoring stale result for "${targetName}"`)
+        return
+      }
 
       if (fullTemplate && fullTemplate.components) {
         // Map Meta components to our preview component's format

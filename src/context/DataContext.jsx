@@ -93,6 +93,7 @@ export const DataProvider = ({ children }) => {
         const mappedTemplates = templatesData.map(t => ({
           id: t.id,
           name: t.template_name,
+          template_name: t.template_name, // Support both naming styles
           type: t.template_type || 'text',
           content: t.body_text || t.content,
           category: t.category,
@@ -365,6 +366,7 @@ export const DataProvider = ({ children }) => {
       const newTemplate = {
         id: data.id,
         name: data.template_name,
+        template_name: data.template_name,
         type: data.template_type,
         content: data.body_text || data.content,
         category: data.category,

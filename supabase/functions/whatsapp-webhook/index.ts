@@ -116,7 +116,9 @@ async function sendFollowupTemplate(
     accessToken: string,
     phoneNumberId: string,
     wabaId: string,
-    contact: { name?: string; first_name?: string;[key: string]: any }
+    contact: { name?: string; first_name?: string;[key: string]: any },
+    supabase: any,
+    userEmail: string
 ): Promise<boolean> {
     const structure = await fetchTemplateStructure(templateName, templateLanguage, accessToken, wabaId)
     console.log(`📋 Template structure for "${templateName}":`, JSON.stringify(structure, null, 2))
@@ -215,6 +217,77 @@ async function sendFollowupTemplate(
 
     if (response.ok) {
         console.log(`✅ Follow-up sent successfully to ${phone}`)
+        const metaData = await response.json()
+        const wamid = metaData.messages?.[0]?.id || null
+
+        // Build template_data for the Chat UI
+        let templateHeader = null
+        let templateBody = `[Template: ${templateName}]`
+        let templateFooter = null
+        let templateButtons: any[] = []
+
+        if (structure) {
+            const headerComp = structure.components.find((c: any) => c.type.toUpperCase() === 'HEADER')
+            if (headerComp && headerComp.format === 'TEXT') templateHeader = headerComp.text
+
+            const bodyComp = structure.components.find((c: any) => c.type.toUpperCase() === 'BODY')
+            if (bodyComp && bodyComp.text) templateBody = bodyComp.text
+
+            const footerComp = structure.components.find((c: any) => c.type.toUpperCase() === 'FOOTER')
+            if (footerComp) templateFooter = footerComp.text
+
+            const buttonsComp = structure.components.find((c: any) => c.type.toUpperCase() === 'BUTTONS')
+            if (buttonsComp && buttonsComp.buttons) {
+                templateButtons = buttonsComp.buttons.map((b: any) => ({
+                    type: b.type,
+                    text: b.text,
+                    url: b.url || null,
+                    phone_number: b.phone_number || null
+                }))
+            }
+
+            // Interpolate dynamic firstName into the body text
+            if (templateBody && structure.bodyParameters?.length > 0) {
+                const firstName = contact.first_name || (contact.name ? contact.name.split(' ')[0] : null) || 'Customer'
+                templateBody = templateBody.replace(/\{\{.+?\}\}/g, firstName)
+            }
+        }
+
+        const now = new Date().toISOString()
+        const templateDataPayload = {
+            header: templateHeader,
+            body: templateBody,
+            footer: templateFooter,
+            buttons: templateButtons,
+            template_name: templateName
+        }
+
+        try {
+            await Promise.all([
+                supabase.from('messages').insert({
+                    user_email: userEmail,
+                    contact_phone: phone,
+                    message: templateBody,
+                    message_type: 'template',
+                    template_data: templateDataPayload,
+                    direction: 'outbound',
+                    status: 'sent',
+                    wamid,
+                    created_at: now
+                }),
+                supabase.from('conversations').upsert({
+                    user_email: userEmail,
+                    contact_phone: phone,
+                    last_message: templateBody,
+                    last_message_time: now,
+                    unread_count: 0
+                }, { onConflict: 'user_email,contact_phone' })
+            ])
+            console.log(`💾 Saved follow-up template to chat database`)
+        } catch (dbErr) {
+            console.error('❌ Error saving follow-up msg to DB:', dbErr)
+        }
+
         return true
     } else {
         const err = await response.json()
@@ -285,6 +358,78 @@ serve(async (req) => {
                 .from('webhook_logs')
                 .insert({ user_email: user.email, webhook_token: token, event_type: eventType, payload: body, processed: false })
                 .select().single()
+
+            // ─── Store all inbound messages for Chat UI ───────────────────
+            for (const message of messages) {
+                const phoneFrom = message.from
+                if (!phoneFrom) continue
+
+                let messageText: string | null = null
+
+                if (message.type === 'text') {
+                    messageText = message.text?.body || null
+                } else if (message.type === 'interactive') {
+                    messageText = message.interactive?.button_reply?.title
+                        || message.interactive?.list_reply?.title
+                        || '[Interactive message]'
+                } else if (message.type === 'button') {
+                    messageText = message.button?.text || '[Button reply]'
+                } else if (message.type === 'image') {
+                    messageText = '📷 Image'
+                } else if (message.type === 'document') {
+                    messageText = '📄 Document'
+                } else if (message.type === 'audio') {
+                    messageText = '🎵 Audio'
+                } else if (message.type === 'video') {
+                    messageText = '🎥 Video'
+                } else if (message.type === 'sticker') {
+                    messageText = '🎨 Sticker'
+                }
+
+                if (messageText) {
+                    const now = new Date().toISOString()
+
+                    // Save to messages table
+                    await supabase.from('messages').insert({
+                        user_email: user.email,
+                        contact_phone: phoneFrom,
+                        message: messageText,
+                        direction: 'inbound',
+                        status: 'received',
+                        wamid: message.id,
+                        created_at: now
+                    })
+
+                    // Upsert conversation with incremented unread & last message
+                    const { data: existingConvo } = await supabase
+                        .from('conversations')
+                        .select('unread_count, contact_name')
+                        .eq('user_email', user.email)
+                        .eq('contact_phone', phoneFrom)
+                        .maybeSingle()
+
+                    // Try to get contact name from user contacts
+                    const allContacts: any[] = user.contacts || []
+                    const norm = (p: string) => p.replace(/\D/g, '').slice(-10)
+                    const matchedContact = allContacts.find((c: any) => {
+                        const stored = norm(String(c.phone || c.mobile || c.whatsapp || ''))
+                        return stored === norm(phoneFrom)
+                    })
+                    const contactName = existingConvo?.contact_name || matchedContact?.name || phoneFrom
+
+                    await supabase.from('conversations').upsert({
+                        user_email: user.email,
+                        contact_phone: phoneFrom,
+                        contact_name: contactName,
+                        last_message: messageText,
+                        last_message_time: now,
+                        unread_count: (existingConvo?.unread_count || 0) + 1
+                    }, { onConflict: 'user_email,contact_phone' })
+
+                    console.log(`💬 Stored inbound message from ${phoneFrom}: "${messageText}"`)
+                }
+            }
+            // ─────────────────────────────────────────────────────────────
 
             // ─── Quick Reply Button Clicks ────────────────────────────────
             for (const message of messages) {
@@ -388,7 +533,9 @@ serve(async (req) => {
                     user.meta_access_token,
                     user.meta_phone_number_id,
                     user.meta_business_account_id || '',
-                    contact
+                    contact,
+                    supabase,
+                    user.email
                 )
             }
             // ─────────────────────────────────────────────────────────────

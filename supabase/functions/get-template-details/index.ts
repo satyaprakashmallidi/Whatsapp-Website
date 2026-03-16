@@ -87,10 +87,15 @@ serve(async (req: Request) => {
             console.log(`   [${i}] ID: ${t.id}, Lang: ${t.language}, Status: ${t.status}, Components: ${t.components?.map((c: any) => c.type).join(', ')}`)
         })
 
-        // Filter by language if provided, otherwise take the first one
+        // Filter by EXACT name match first (Meta's 'name' parameter can be a prefix search)
+        const exactMatches = templatesFound.filter((t: any) => t.name === template_name)
+
+        console.log(`🎯 Exact matches for "${template_name}": ${exactMatches.length}`)
+
+        // Filter by language if provided, otherwise take the first exact match
         const template = language
-            ? templatesFound.find((t: any) => t.language === language) || templatesFound[0]
-            : templatesFound[0]
+            ? exactMatches.find((t: any) => t.language === language) || exactMatches[0]
+            : exactMatches[0]
 
         if (!template) {
             return new Response(
