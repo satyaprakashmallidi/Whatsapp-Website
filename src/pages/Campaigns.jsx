@@ -257,12 +257,12 @@ const Campaigns = () => {
         </div>
 
         {/* Filter Tabs */}
-        <div className="flex space-x-2 mb-6 overflow-x-auto pb-2 scrollbar-none -mx-4 px-4 lg:mx-0 lg:px-0">
+        <div className="flex space-x-2 mb-6 overflow-x-auto pb-2 scrollbar-none -mx-4 px-4 lg:mx-0 lg:px-0 scrollbar-hide">
           {filterTabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveFilter(tab.key)}
-              className={`whitespace-nowrap px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 border-2 ${activeFilter === tab.key
+              className={`flex-shrink-0 whitespace-nowrap px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center space-x-2 border-2 ${activeFilter === tab.key
                 ? 'bg-[#FF9800] border-[#FF9800] text-white shadow-sm'
                 : 'bg-white border-gray-100 text-gray-500 hover:border-gray-200 hover:bg-gray-50'
                 }`}
