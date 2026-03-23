@@ -370,47 +370,72 @@ serve(async (req) => {
                                 if (phoneFrom && user.meta_access_token && user.meta_phone_number_id) {
                                     console.log(`🤖 Received AI reply from webhook: "${resJson.reply_message}"`)
 
-                                    const metaPayload = {
-                                        messaging_product: 'whatsapp',
-                                        recipient_type: 'individual',
-                                        to: phoneFrom,
-                                        type: 'text',
-                                        text: { body: resJson.reply_message }
-                                    }
+                                    // Split on "||" to support multi-message replies
+                                    const messageParts = resJson.reply_message
+                                        .split('||')
+                                        .map((p: string) => p.trim())
+                                        .filter((p: string) => p.length > 0)
 
-                                    const metaRes = await fetch(`https://graph.facebook.com/v20.0/${user.meta_phone_number_id}/messages`, {
-                                        method: 'POST',
-                                        headers: { 'Authorization': `Bearer ${user.meta_access_token}`, 'Content-Type': 'application/json' },
-                                        body: JSON.stringify(metaPayload)
-                                    })
+                                    console.log(`📨 Sending ${messageParts.length} message part(s) to ${phoneFrom}`)
 
-                                    if (metaRes.ok) {
-                                        const metaData = await metaRes.json()
-                                        const wamid = metaData.messages?.[0]?.id || null
-                                        const now = new Date().toISOString()
+                                    let lastMessage = messageParts[messageParts.length - 1]
 
-                                        await Promise.all([
-                                            supabase.from('messages').insert({
+                                    for (let i = 0; i < messageParts.length; i++) {
+                                        const part = messageParts[i]
+
+                                        // Add a 500ms delay between messages (skip before the first)
+                                        if (i > 0) {
+                                            await new Promise(resolve => setTimeout(resolve, 500))
+                                        }
+
+                                        const metaPayload = {
+                                            messaging_product: 'whatsapp',
+                                            recipient_type: 'individual',
+                                            to: phoneFrom,
+                                            type: 'text',
+                                            text: { body: part }
+                                        }
+
+                                        const metaRes = await fetch(`https://graph.facebook.com/v20.0/${user.meta_phone_number_id}/messages`, {
+                                            method: 'POST',
+                                            headers: { 'Authorization': `Bearer ${user.meta_access_token}`, 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(metaPayload)
+                                        })
+
+                                        if (metaRes.ok) {
+                                            const metaData = await metaRes.json()
+                                            const wamid = metaData.messages?.[0]?.id || null
+                                            const now = new Date().toISOString()
+
+                                            // Always insert each message part into the messages table
+                                            await supabase.from('messages').insert({
                                                 user_email: user.email,
                                                 contact_phone: phoneFrom,
-                                                message: resJson.reply_message,
+                                                message: part,
                                                 direction: 'outbound',
                                                 status: 'sent',
                                                 wamid,
                                                 created_at: now
-                                            }),
-                                            supabase.from('conversations').upsert({
-                                                user_email: user.email,
-                                                contact_phone: phoneFrom,
-                                                last_message: resJson.reply_message,
-                                                last_message_time: now,
-                                                unread_count: 0
-                                            }, { onConflict: 'user_email,contact_phone' })
-                                        ])
-                                        console.log('✅ Sent and logged auto-reply from external webhook')
-                                    } else {
-                                        console.error('❌ Failed to send auto-reply to Meta:', await metaRes.text())
+                                            })
+
+                                            // Only upsert conversation after the last message part
+                                            if (i === messageParts.length - 1) {
+                                                await supabase.from('conversations').upsert({
+                                                    user_email: user.email,
+                                                    contact_phone: phoneFrom,
+                                                    last_message: part,
+                                                    last_message_time: now,
+                                                    unread_count: 0
+                                                }, { onConflict: 'user_email,contact_phone' })
+                                            }
+
+                                            console.log(`✅ Sent part ${i + 1}/${messageParts.length}: "${part}"`)
+                                        } else {
+                                            console.error(`❌ Failed to send part ${i + 1} to Meta:`, await metaRes.text())
+                                        }
                                     }
+
+                                    console.log('✅ All reply parts sent from external webhook')
                                 }
                             }
                         } catch (e) {
