@@ -368,18 +368,39 @@ serve(async (req) => {
                 }).then(async res => {
                     if (res.ok) {
                         try {
-                            const resJson = await res.json()
-                            if (resJson && resJson.reply_message) {
+                            // Read as text first so we can attempt JSON repair if n8n sends invalid JSON
+                            // (e.g., unescaped newlines in multi-line addresses, trailing commas)
+                            const rawText = await res.text()
+                            let resJson: any = null
+                            try {
+                                resJson = JSON.parse(rawText)
+                            } catch {
+                                // Try to sanitize: escape raw newlines and remove trailing commas
+                                try {
+                                    const sanitized = rawText
+                                        .replace(/\r?\n/g, '\\n')
+                                        .replace(/,\s*([\]}])/g, '$1')
+                                        .replace(/\\+n/g, '\\n')
+                                    resJson = JSON.parse(sanitized)
+                                    console.log('⚠️ Auto-repaired invalid JSON from external webhook')
+                                } catch {
+                                    console.error('❌ External webhook response is not valid JSON:', rawText.substring(0, 200))
+                                }
+                            }
+                            // Handle both array (n8n style: [{reply_message: "..."}]) and object ({reply_message: "..."}) formats
+                            const replyMessage = Array.isArray(resJson) ? resJson[0]?.reply_message : resJson?.reply_message
+                            if (replyMessage) {
                                 // Extract sender's phone to send the reply back
                                 const phoneFrom = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from
                                 if (phoneFrom && user.meta_access_token && user.meta_phone_number_id) {
                                     // Split message by || delimiter and send as separate messages
-                                    const messageParts = resJson.reply_message
+                                    const rawReply = String(replyMessage)
+                                    const messageParts = rawReply
                                         .split('||')
-                                        .map((s: string) => s.trim())
+                                        .map((s: string) => s.trim().replace(/\\n/g, '\n'))
                                         .filter((s: string) => s.length > 0)
 
-                                    console.log(`🤖 Received AI reply from webhook: "${resJson.reply_message}"`)
+                                    console.log(`🤖 Received AI reply from webhook: "${rawReply.substring(0, 100)}${rawReply.length > 100 ? '...' : ''}"`)
                                     console.log(`📤 Splitting into ${messageParts.length} message(s)`)
 
                                     let lastSentMessage = ''

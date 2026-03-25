@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(curl -X POST \"https://backend.aisensy.com/campaign/t1/api/v2\" -H \"Content-Type: application/json\" -d \"{\"\"apiKey\"\": \"\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4NzgxOGVkODkyZjM5MGE3ZmFjMjBhZSIsIm5hbWUiOiJDYW1wYWlnbiBIdWIiLCJhcHBOYW1lIjoiQWlTZW5zeSIsImNsaWVudElkIjoiNjgzNWFjYTE5NmYxNzYwYmIxMTJhMWMwIiwiYWN0aXZlUGxhbiI6IkJBU0lDX01PTlRITFkiLCJpYXQiOjE3NDkxNjIyMjF9.xZFyTMQ8EqaYgqaVWj2fCwq8FthQnIE3RRD65WKKg-w\"\", \"\"campaignName\"\": \"\"Test Campaign 23-01-2026\"\", \"\"destination\"\": \"\"919876543210\"\", \"\"userName\"\": \"\"123456789\"\", \"\"templateParams\"\": [\"\"TestUser\"\", \"\"95\"\", \"\"today\"\"]}\")",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "mcp__OpusCode__understand_image",
+      "WebFetch(domain:claude.opuscode.pro)"
     ]
   }
 }
